@@ -44,6 +44,31 @@
 	hash_long((unsigned long)nr + (unsigned long)ns, pidhash_shift)
 static struct hlist_head *pid_hash;
 static unsigned int pidhash_shift = 4;
+#define NEGPID_HASH_BITS 8
+#define NEGPID_HASH_SIZE (1 << NEGPID_HASH_BITS)
+static struct hlist_head negpid_hash[NEGPID_HASH_SIZE];
+static DEFINE_SPINLOCK(negpid_hash_lock);
+
+static inline unsigned int negpid_hashfn(pid_t nr, struct pid_namespace *ns)
+{
+	return ((unsigned int)(-nr) ^ (unsigned long)ns) & (NEGPID_HASH_SIZE - 1);
+}
+
+static void negpid_hash_del(struct pid *pid)
+{
+	int i;
+
+	for (i = 0; i <= pid->level; i++) {
+		struct upid *upid = pid->numbers + i;
+
+		if (upid->nr < 0 && upid->neg_pid_chain.pprev &&
+		    upid->neg_pid_chain.pprev != LIST_POISON2) {
+			spin_lock(&negpid_hash_lock);
+			hlist_del_rcu(&upid->neg_pid_chain);
+			spin_unlock(&negpid_hash_lock);
+		}
+	}
+}
 struct pid init_struct_pid = INIT_STRUCT_PID;
 
 int pid_max = PID_MAX_DEFAULT;
@@ -242,7 +267,9 @@ void put_pid(struct pid *pid)
 
 	ns = pid->numbers[pid->level].ns;
 	if ((atomic_read(&pid->count) == 1) ||
-	     atomic_dec_and_test(&pid->count)) {
+	    atomic_dec_and_test(&pid->count)) {
+		if (pid->numbers[pid->level].nr < 0)
+			negpid_hash_del(pid);
 		kmem_cache_free(ns->pid_cachep, pid);
 		put_pid_ns(ns);
 	}
@@ -257,7 +284,6 @@ static void delayed_put_pid(struct rcu_head *rhp)
 
 void free_pid(struct pid *pid)
 {
-	/* We can be called with write_lock_irq(&tasklist_lock) held */
 	int i;
 	unsigned long flags;
 
@@ -265,18 +291,17 @@ void free_pid(struct pid *pid)
 	for (i = 0; i <= pid->level; i++) {
 		struct upid *upid = pid->numbers + i;
 		struct pid_namespace *ns = upid->ns;
+
+		if (upid->nr < 0)
+			continue;
+
 		hlist_del_rcu(&upid->pid_chain);
-		switch(--ns->nr_hashed) {
+		switch (--ns->nr_hashed) {
 		case 2:
 		case 1:
-			/* When all that is left in the pid namespace
-			 * is the reaper wake up the reaper.  The reaper
-			 * may be sleeping in zap_pid_ns_processes().
-			 */
 			wake_up_process(ns->child_reaper);
 			break;
 		case PIDNS_HASH_ADDING:
-			/* Handle a fork failure of the first process */
 			WARN_ON(ns->child_reaper);
 			ns->nr_hashed = 0;
 			/* fall through */
@@ -287,13 +312,17 @@ void free_pid(struct pid *pid)
 	}
 	spin_unlock_irqrestore(&pidmap_lock, flags);
 
-	for (i = 0; i <= pid->level; i++)
-		free_pidmap(pid->numbers + i);
+	for (i = 0; i <= pid->level; i++) {
+		struct upid *upid = pid->numbers + i;
+
+		if (upid->nr >= 0)
+			free_pidmap(upid);
+	}
 
 	call_rcu(&pid->rcu, delayed_put_pid);
 }
 
-struct pid *alloc_pid(struct pid_namespace *ns)
+struct pid *alloc_pid(struct pid_namespace *ns, pid_t want_neg)
 {
 	struct pid *pid;
 	enum pid_type type;
@@ -301,6 +330,7 @@ struct pid *alloc_pid(struct pid_namespace *ns)
 	struct pid_namespace *tmp;
 	struct upid *upid;
 	int retval = -ENOMEM;
+	bool is_neg = (want_neg < 0);
 
 	pid = kmem_cache_alloc(ns->pid_cachep, GFP_KERNEL);
 	if (!pid)
@@ -309,14 +339,19 @@ struct pid *alloc_pid(struct pid_namespace *ns)
 	tmp = ns;
 	pid->level = ns->level;
 	for (i = ns->level; i >= 0; i--) {
-		nr = alloc_pidmap(tmp);
-		if (nr < 0) {
-			retval = nr;
-			goto out_free;
+		if (is_neg) {
+			nr = want_neg;
+		} else {
+			nr = alloc_pidmap(tmp);
+			if (nr < 0) {
+				retval = nr;
+				goto out_free;
+			}
 		}
 
 		pid->numbers[i].nr = nr;
 		pid->numbers[i].ns = tmp;
+		pid->numbers[i].neg_pid_chain.pprev = NULL;
 		tmp = tmp->parent;
 	}
 
@@ -336,12 +371,22 @@ struct pid *alloc_pid(struct pid_namespace *ns)
 	spin_lock_irq(&pidmap_lock);
 	if (!(ns->nr_hashed & PIDNS_HASH_ADDING))
 		goto out_unlock;
-	for ( ; upid >= pid->numbers; --upid) {
-		hlist_add_head_rcu(&upid->pid_chain,
-				&pid_hash[pid_hashfn(upid->nr, upid->ns)]);
-		upid->ns->nr_hashed++;
+
+	if (is_neg) {
+		spin_unlock_irq(&pidmap_lock);
+		spin_lock(&negpid_hash_lock);
+		for ( ; upid >= pid->numbers; --upid)
+			hlist_add_head_rcu(&upid->neg_pid_chain,
+				&negpid_hash[negpid_hashfn(upid->nr, upid->ns)]);
+		spin_unlock(&negpid_hash_lock);
+	} else {
+		for ( ; upid >= pid->numbers; --upid) {
+			hlist_add_head_rcu(&upid->pid_chain,
+					&pid_hash[pid_hashfn(upid->nr, upid->ns)]);
+			upid->ns->nr_hashed++;
+		}
+		spin_unlock_irq(&pidmap_lock);
 	}
-	spin_unlock_irq(&pidmap_lock);
 
 	return pid;
 
@@ -350,8 +395,10 @@ out_unlock:
 	put_pid_ns(ns);
 
 out_free:
-	while (++i <= ns->level)
-		free_pidmap(pid->numbers + i);
+	if (!is_neg) {
+		while (++i <= ns->level)
+			free_pidmap(pid->numbers + i);
+	}
 
 	kmem_cache_free(ns->pid_cachep, pid);
 	return ERR_PTR(retval);
@@ -368,6 +415,16 @@ struct pid *find_pid_ns(int nr, struct pid_namespace *ns)
 {
 	struct upid *pnr;
 
+	if (nr < 0) {
+		hlist_for_each_entry_rcu(pnr,
+				&negpid_hash[negpid_hashfn(nr, ns)],
+				neg_pid_chain)
+			if (pnr->nr == nr && pnr->ns == ns)
+				return container_of(pnr, struct pid,
+						numbers[ns->level]);
+		return NULL;
+	}
+
 	hlist_for_each_entry_rcu(pnr,
 			&pid_hash[pid_hashfn(nr, ns)], pid_chain)
 		if (pnr->nr == nr && pnr->ns == ns)
@@ -377,6 +434,12 @@ struct pid *find_pid_ns(int nr, struct pid_namespace *ns)
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(find_pid_ns);
+
+struct pid *find_neg_vpid(pid_t vnr, struct pid_namespace *ns)
+{
+	return find_pid_ns(vnr, ns);
+}
+EXPORT_SYMBOL_GPL(find_neg_vpid);
 
 struct pid *find_vpid(int nr)
 {
@@ -576,6 +639,8 @@ void __init pidhash_init(void)
 					   HASH_EARLY | HASH_SMALL | HASH_ZERO,
 					   &pidhash_shift, NULL,
 					   0, 4096);
+        for (i = 0; i < NEGPID_HASH_SIZE; i++)
+	INIT_HLIST_HEAD(&negpid_hash[i]);
 }
 
 void __init pidmap_init(void)
