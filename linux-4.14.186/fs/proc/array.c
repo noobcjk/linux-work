@@ -190,9 +190,9 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 
 	seq_printf(m, "State:\t%s", get_task_state(p));
 
-	seq_put_decimal_ull(m, "\nTgid:\t", tgid);
+	seq_printf(m, "\nTgid:\t%d", tgid);
 	seq_put_decimal_ull(m, "\nNgid:\t", ngid);
-	seq_put_decimal_ull(m, "\nPid:\t", pid_nr_ns(pid, ns));
+	seq_printf(m, "\nPid:\t%d", pid_nr_ns(pid, ns));
 	seq_put_decimal_ull(m, "\nPPid:\t", ppid);
 	seq_put_decimal_ull(m, "\nTracerPid:\t", tpid);
 	seq_put_decimal_ull(m, "\nUid:\t", from_kuid_munged(user_ns, cred->uid));
@@ -217,16 +217,16 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 #ifdef CONFIG_PID_NS
 	seq_puts(m, "\nNStgid:");
 	for (g = ns->level; g <= pid->level; g++)
-		seq_put_decimal_ull(m, "\t", task_tgid_nr_ns(p, pid->numbers[g].ns));
+		seq_printf(m, "\t%d", task_tgid_nr_ns(p, pid->numbers[g].ns));
 	seq_puts(m, "\nNSpid:");
 	for (g = ns->level; g <= pid->level; g++)
-		seq_put_decimal_ull(m, "\t", task_pid_nr_ns(p, pid->numbers[g].ns));
+		seq_printf(m, "\t%d", task_pid_nr_ns(p, pid->numbers[g].ns));
 	seq_puts(m, "\nNSpgid:");
 	for (g = ns->level; g <= pid->level; g++)
-		seq_put_decimal_ull(m, "\t", task_pgrp_nr_ns(p, pid->numbers[g].ns));
+		seq_printf(m, "\t%d", task_pgrp_nr_ns(p, pid->numbers[g].ns));
 	seq_puts(m, "\nNSsid:");
 	for (g = ns->level; g <= pid->level; g++)
-		seq_put_decimal_ull(m, "\t", task_session_nr_ns(p, pid->numbers[g].ns));
+		seq_printf(m, "\t%d", task_session_nr_ns(p, pid->numbers[g].ns));
 #endif
 	seq_putc(m, '\n');
 }

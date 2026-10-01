@@ -69,6 +69,8 @@ struct pid
 };
 
 extern struct pid init_struct_pid;
+struct hlist_head *negpid_hash_get(void);
+int negpid_hash_size(void);
 
 struct pid_link
 {

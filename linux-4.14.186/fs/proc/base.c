@@ -111,7 +111,7 @@
  *	The classic example of a problem is opening file descriptors
  *	in /proc for a task before it execs a suid executable.
  */
-
+static int proc_negpid_readdir(struct file *file, struct dir_context *ctx);
 static u8 nlink_tid;
 static u8 nlink_tgid;
 
@@ -3282,7 +3282,7 @@ int proc_pid_readdir(struct file *file, struct dir_context *ctx)
 	loff_t pos = ctx->pos;
 
 	if (pos >= PID_MAX_LIMIT + TGID_OFFSET)
-		return 0;
+		return proc_negpid_readdir(file, ctx);
 
 	if (pos == TGID_OFFSET - 2) {
 		struct inode *inode = d_inode(ns->proc_self);
@@ -3317,7 +3317,7 @@ int proc_pid_readdir(struct file *file, struct dir_context *ctx)
 		}
 	}
 	ctx->pos = PID_MAX_LIMIT + TGID_OFFSET;
-	return 0;
+	return proc_negpid_readdir(file, ctx);
 }
 
 /*
@@ -3685,4 +3685,57 @@ void __init set_proc_pid_nlink(void)
 {
 	nlink_tid = pid_entry_nlink(tid_base_stuff, ARRAY_SIZE(tid_base_stuff));
 	nlink_tgid = pid_entry_nlink(tgid_base_stuff, ARRAY_SIZE(tgid_base_stuff));
+}
+
+static int proc_negpid_readdir(struct file *file, struct dir_context *ctx)
+{
+	struct pid_namespace *ns = file_inode(file)->i_sb->s_fs_info;
+	struct hlist_head *negpid_hash = negpid_hash_get();
+	int hash_size = negpid_hash_size();
+	loff_t skip = ctx->pos - PID_MAX_LIMIT - TGID_OFFSET;
+	int bucket;
+	int idx = 0;
+
+	for (bucket = 0; bucket < hash_size; bucket++) {
+		struct upid *upid;
+
+		rcu_read_lock();
+		hlist_for_each_entry_rcu(upid,
+				&negpid_hash[bucket], neg_pid_chain) {
+			struct pid *pid;
+			struct task_struct *task;
+			char name[PROC_NUMBUF];
+			int len;
+
+			if (upid->ns != ns)
+				continue;
+
+			idx++;
+			if (idx <= skip)
+				continue;
+
+			pid = container_of(upid, struct pid,
+					numbers[ns->level]);
+			task = pid_task(pid, PIDTYPE_PID);
+			if (!task)
+				continue;
+			get_task_struct(task);
+
+			len = snprintf(name, sizeof(name), "%d", upid->nr);
+			ctx->pos = PID_MAX_LIMIT + TGID_OFFSET + idx;
+			rcu_read_unlock();
+
+			if (!proc_fill_cache(file, ctx, name, len,
+					     proc_pid_instantiate, task, NULL)) {
+				put_task_struct(task);
+				return 0;
+			}
+			put_task_struct(task);
+			rcu_read_lock();
+		}
+		rcu_read_unlock();
+	}
+
+	ctx->pos = PID_MAX_LIMIT + TGID_OFFSET + idx + 1;
+	return 0;
 }

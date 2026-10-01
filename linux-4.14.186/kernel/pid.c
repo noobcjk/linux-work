@@ -441,6 +441,18 @@ struct pid *find_neg_vpid(pid_t vnr, struct pid_namespace *ns)
 }
 EXPORT_SYMBOL_GPL(find_neg_vpid);
 
+struct hlist_head *negpid_hash_get(void)
+{
+	return negpid_hash;
+}
+EXPORT_SYMBOL_GPL(negpid_hash_get);
+
+int negpid_hash_size(void)
+{
+	return NEGPID_HASH_SIZE;
+}
+EXPORT_SYMBOL_GPL(negpid_hash_size);
+
 struct pid *find_vpid(int nr)
 {
 	return find_pid_ns(nr, task_active_pid_ns(current));
@@ -635,6 +647,9 @@ struct pid *find_ge_pid(int nr, struct pid_namespace *ns)
  */
 void __init pidhash_init(void)
 {
+ unsigned long pidhash_size;
+ unsigned long i;
+
 	pid_hash = alloc_large_system_hash("PID", sizeof(*pid_hash), 0, 18,
 					   HASH_EARLY | HASH_SMALL | HASH_ZERO,
 					   &pidhash_shift, NULL,
