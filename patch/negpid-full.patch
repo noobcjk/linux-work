@@ -1,8 +1,50 @@
-diff --git a/linux-4.14.186/fs/proc/base.c b/linux-4.14.186/fs/proc/base.c
-index 64695dcf..6a072d7d 100644
---- a/linux-4.14.186/fs/proc/base.c
-+++ b/linux-4.14.186/fs/proc/base.c
-@@ -3178,6 +3178,38 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, unsign
+--- a/fs/proc/array.c
++++ b/fs/proc/array.c
+@@ -190,9 +190,9 @@
+ 
+ 	seq_printf(m, "State:\t%s", get_task_state(p));
+ 
+-	seq_put_decimal_ull(m, "\nTgid:\t", tgid);
++	seq_printf(m, "\nTgid:\t%d", tgid);
+ 	seq_put_decimal_ull(m, "\nNgid:\t", ngid);
+-	seq_put_decimal_ull(m, "\nPid:\t", pid_nr_ns(pid, ns));
++	seq_printf(m, "\nPid:\t%d", pid_nr_ns(pid, ns));
+ 	seq_put_decimal_ull(m, "\nPPid:\t", ppid);
+ 	seq_put_decimal_ull(m, "\nTracerPid:\t", tpid);
+ 	seq_put_decimal_ull(m, "\nUid:\t", from_kuid_munged(user_ns, cred->uid));
+@@ -217,16 +217,16 @@
+ #ifdef CONFIG_PID_NS
+ 	seq_puts(m, "\nNStgid:");
+ 	for (g = ns->level; g <= pid->level; g++)
+-		seq_put_decimal_ull(m, "\t", task_tgid_nr_ns(p, pid->numbers[g].ns));
++		seq_printf(m, "\t%d", task_tgid_nr_ns(p, pid->numbers[g].ns));
+ 	seq_puts(m, "\nNSpid:");
+ 	for (g = ns->level; g <= pid->level; g++)
+-		seq_put_decimal_ull(m, "\t", task_pid_nr_ns(p, pid->numbers[g].ns));
++		seq_printf(m, "\t%d", task_pid_nr_ns(p, pid->numbers[g].ns));
+ 	seq_puts(m, "\nNSpgid:");
+ 	for (g = ns->level; g <= pid->level; g++)
+-		seq_put_decimal_ull(m, "\t", task_pgrp_nr_ns(p, pid->numbers[g].ns));
++		seq_printf(m, "\t%d", task_pgrp_nr_ns(p, pid->numbers[g].ns));
+ 	seq_puts(m, "\nNSsid:");
+ 	for (g = ns->level; g <= pid->level; g++)
+-		seq_put_decimal_ull(m, "\t", task_session_nr_ns(p, pid->numbers[g].ns));
++		seq_printf(m, "\t%d", task_session_nr_ns(p, pid->numbers[g].ns));
+ #endif
+ 	seq_putc(m, '\n');
+ }
+--- a/fs/proc/base.c
++++ b/fs/proc/base.c
+@@ -111,7 +111,7 @@
+  *	The classic example of a problem is opening file descriptors
+  *	in /proc for a task before it execs a suid executable.
+  */
+-
++static int proc_negpid_readdir(struct file *file, struct dir_context *ctx);
+ static u8 nlink_tid;
+ static u8 nlink_tgid;
+ 
+@@ -3178,6 +3178,38 @@
  	unsigned tgid;
  	struct pid_namespace *ns;
  
@@ -41,11 +83,84 @@ index 64695dcf..6a072d7d 100644
  	tgid = name_to_int(&dentry->d_name);
  	if (tgid == ~0U)
  		goto out;
-diff --git a/linux-4.14.186/include/linux/pid.h b/linux-4.14.186/include/linux/pid.h
-index dfd684ce..4c497323 100644
---- a/linux-4.14.186/include/linux/pid.h
-+++ b/linux-4.14.186/include/linux/pid.h
-@@ -55,6 +55,7 @@ struct upid {
+@@ -3250,7 +3282,7 @@
+ 	loff_t pos = ctx->pos;
+ 
+ 	if (pos >= PID_MAX_LIMIT + TGID_OFFSET)
+-		return 0;
++		return proc_negpid_readdir(file, ctx);
+ 
+ 	if (pos == TGID_OFFSET - 2) {
+ 		struct inode *inode = d_inode(ns->proc_self);
+@@ -3285,7 +3317,7 @@
+ 		}
+ 	}
+ 	ctx->pos = PID_MAX_LIMIT + TGID_OFFSET;
+-	return 0;
++	return proc_negpid_readdir(file, ctx);
+ }
+ 
+ /*
+@@ -3654,3 +3686,56 @@
+ 	nlink_tid = pid_entry_nlink(tid_base_stuff, ARRAY_SIZE(tid_base_stuff));
+ 	nlink_tgid = pid_entry_nlink(tgid_base_stuff, ARRAY_SIZE(tgid_base_stuff));
+ }
++
++static int proc_negpid_readdir(struct file *file, struct dir_context *ctx)
++{
++	struct pid_namespace *ns = file_inode(file)->i_sb->s_fs_info;
++	struct hlist_head *negpid_hash = negpid_hash_get();
++	int hash_size = negpid_hash_size();
++	loff_t skip = ctx->pos - PID_MAX_LIMIT - TGID_OFFSET;
++	int bucket;
++	int idx = 0;
++
++	for (bucket = 0; bucket < hash_size; bucket++) {
++		struct upid *upid;
++
++		rcu_read_lock();
++		hlist_for_each_entry_rcu(upid,
++				&negpid_hash[bucket], neg_pid_chain) {
++			struct pid *pid;
++			struct task_struct *task;
++			char name[PROC_NUMBUF];
++			int len;
++
++			if (upid->ns != ns)
++				continue;
++
++			idx++;
++			if (idx <= skip)
++				continue;
++
++			pid = container_of(upid, struct pid,
++					numbers[ns->level]);
++			task = pid_task(pid, PIDTYPE_PID);
++			if (!task)
++				continue;
++			get_task_struct(task);
++
++			len = snprintf(name, sizeof(name), "%d", upid->nr);
++			ctx->pos = PID_MAX_LIMIT + TGID_OFFSET + idx;
++			rcu_read_unlock();
++
++			if (!proc_fill_cache(file, ctx, name, len,
++					     proc_pid_instantiate, task, NULL)) {
++				put_task_struct(task);
++				return 0;
++			}
++			put_task_struct(task);
++			rcu_read_lock();
++		}
++		rcu_read_unlock();
++	}
++
++	ctx->pos = PID_MAX_LIMIT + TGID_OFFSET + idx + 1;
++	return 0;
++}
+--- a/include/linux/pid.h
++++ b/include/linux/pid.h
+@@ -55,6 +55,7 @@
  	int nr;
  	struct pid_namespace *ns;
  	struct hlist_node pid_chain;
@@ -53,7 +168,16 @@ index dfd684ce..4c497323 100644
  };
  
  struct pid
-@@ -120,7 +121,8 @@ extern struct pid *find_get_pid(int nr);
+@@ -68,6 +69,8 @@
+ };
+ 
+ extern struct pid init_struct_pid;
++struct hlist_head *negpid_hash_get(void);
++int negpid_hash_size(void);
+ 
+ struct pid_link
+ {
+@@ -120,7 +123,8 @@
  extern struct pid *find_ge_pid(int nr, struct pid_namespace *);
  int next_pidmap(struct pid_namespace *pid_ns, unsigned int last);
  
@@ -63,11 +187,9 @@ index dfd684ce..4c497323 100644
  extern void free_pid(struct pid *pid);
  extern void disable_pid_allocation(struct pid_namespace *ns);
  
-diff --git a/linux-4.14.186/include/linux/sched.h b/linux-4.14.186/include/linux/sched.h
-index 99650f05..047e4fbe 100644
---- a/linux-4.14.186/include/linux/sched.h
-+++ b/linux-4.14.186/include/linux/sched.h
-@@ -699,7 +699,7 @@ struct task_struct {
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -699,7 +699,7 @@
  
  	pid_t				pid;
  	pid_t				tgid;
@@ -76,20 +198,40 @@ index 99650f05..047e4fbe 100644
  #ifdef CONFIG_CC_STACKPROTECTOR
  	/* Canary value for the -fstack-protector GCC feature: */
  	unsigned long			stack_canary;
-diff --git a/linux-4.14.186/kernel/fork.c b/linux-4.14.186/kernel/fork.c
-index 0a328cf0..2518fa62 100644
---- a/linux-4.14.186/kernel/fork.c
-+++ b/linux-4.14.186/kernel/fork.c
-@@ -1782,7 +1782,7 @@ static __latent_entropy struct task_struct *copy_process(
+--- a/include/uapi/linux/sched.h
++++ b/include/uapi/linux/sched.h
+@@ -29,7 +29,7 @@
+ #define CLONE_NEWPID		0x20000000	/* New pid namespace */
+ #define CLONE_NEWNET		0x40000000	/* New network namespace */
+ #define CLONE_IO		0x80000000	/* Clone io context */
+-
++#define CLONE_NEGPID	0x00001000	/* set if the child should get a negative pid */
+ /*
+  * Scheduling policies
+  */
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -1564,6 +1564,7 @@
+ {
+ 	int retval;
+ 	struct task_struct *p;
++        pid_t want_neg = 0; 
+ 
+ 	if ((clone_flags & (CLONE_NEWNS|CLONE_FS)) == (CLONE_NEWNS|CLONE_FS))
+ 		return ERR_PTR(-EINVAL);
+@@ -1782,7 +1783,10 @@
  		goto bad_fork_cleanup_io;
  
  	if (pid != &init_struct_pid) {
 -		pid = alloc_pid(p->nsproxy->pid_ns_for_children);
-+		pid = alloc_pid(p->nsproxy->pid_ns_for_children,current->want_neg_pid);
++           pid_t want_neg = 0;
++		if (clone_flags & CLONE_NEGPID)
++			want_neg = -5000;
++                pid = alloc_pid(p->nsproxy->pid_ns_for_children, want_neg);
  		if (IS_ERR(pid)) {
  			retval = PTR_ERR(pid);
  			goto bad_fork_cleanup_thread;
-@@ -1813,6 +1813,7 @@ static __latent_entropy struct task_struct *copy_process(
+@@ -1813,6 +1817,7 @@
  
  	/* ok, now we should be set up.. */
  	p->pid = pid_nr(pid);
@@ -97,7 +239,7 @@ index 0a328cf0..2518fa62 100644
  	if (clone_flags & CLONE_THREAD) {
  		p->exit_signal = -1;
  		p->group_leader = current->group_leader;
-@@ -2129,9 +2130,10 @@ long do_fork(unsigned long clone_flags,
+@@ -2129,9 +2134,10 @@
   */
  pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
  {
@@ -109,10 +251,8 @@ index 0a328cf0..2518fa62 100644
  
  #ifdef __ARCH_WANT_SYS_FORK
  SYSCALL_DEFINE0(fork)
-diff --git a/linux-4.14.186/kernel/pid.c b/linux-4.14.186/kernel/pid.c
-index 020dedbd..30c74915 100644
---- a/linux-4.14.186/kernel/pid.c
-+++ b/linux-4.14.186/kernel/pid.c
+--- a/kernel/pid.c
++++ b/kernel/pid.c
 @@ -44,6 +44,31 @@
  	hash_long((unsigned long)nr + (unsigned long)ns, pidhash_shift)
  static struct hlist_head *pid_hash;
@@ -145,7 +285,7 @@ index 020dedbd..30c74915 100644
  struct pid init_struct_pid = INIT_STRUCT_PID;
  
  int pid_max = PID_MAX_DEFAULT;
-@@ -242,7 +267,9 @@ void put_pid(struct pid *pid)
+@@ -242,7 +267,9 @@
  
  	ns = pid->numbers[pid->level].ns;
  	if ((atomic_read(&pid->count) == 1) ||
@@ -156,7 +296,7 @@ index 020dedbd..30c74915 100644
  		kmem_cache_free(ns->pid_cachep, pid);
  		put_pid_ns(ns);
  	}
-@@ -257,7 +284,6 @@ static void delayed_put_pid(struct rcu_head *rhp)
+@@ -257,7 +284,6 @@
  
  void free_pid(struct pid *pid)
  {
@@ -164,7 +304,7 @@ index 020dedbd..30c74915 100644
  	int i;
  	unsigned long flags;
  
-@@ -265,18 +291,17 @@ void free_pid(struct pid *pid)
+@@ -265,18 +291,17 @@
  	for (i = 0; i <= pid->level; i++) {
  		struct upid *upid = pid->numbers + i;
  		struct pid_namespace *ns = upid->ns;
@@ -188,7 +328,7 @@ index 020dedbd..30c74915 100644
  			WARN_ON(ns->child_reaper);
  			ns->nr_hashed = 0;
  			/* fall through */
-@@ -287,13 +312,17 @@ void free_pid(struct pid *pid)
+@@ -287,13 +312,17 @@
  	}
  	spin_unlock_irqrestore(&pidmap_lock, flags);
  
@@ -209,7 +349,7 @@ index 020dedbd..30c74915 100644
  {
  	struct pid *pid;
  	enum pid_type type;
-@@ -301,6 +330,7 @@ struct pid *alloc_pid(struct pid_namespace *ns)
+@@ -301,6 +330,7 @@
  	struct pid_namespace *tmp;
  	struct upid *upid;
  	int retval = -ENOMEM;
@@ -217,7 +357,7 @@ index 020dedbd..30c74915 100644
  
  	pid = kmem_cache_alloc(ns->pid_cachep, GFP_KERNEL);
  	if (!pid)
-@@ -309,14 +339,19 @@ struct pid *alloc_pid(struct pid_namespace *ns)
+@@ -309,14 +339,19 @@
  	tmp = ns;
  	pid->level = ns->level;
  	for (i = ns->level; i >= 0; i--) {
@@ -241,7 +381,7 @@ index 020dedbd..30c74915 100644
  		tmp = tmp->parent;
  	}
  
-@@ -336,12 +371,22 @@ struct pid *alloc_pid(struct pid_namespace *ns)
+@@ -336,12 +371,22 @@
  	spin_lock_irq(&pidmap_lock);
  	if (!(ns->nr_hashed & PIDNS_HASH_ADDING))
  		goto out_unlock;
@@ -269,7 +409,7 @@ index 020dedbd..30c74915 100644
  
  	return pid;
  
-@@ -350,8 +395,10 @@ struct pid *alloc_pid(struct pid_namespace *ns)
+@@ -350,8 +395,10 @@
  	put_pid_ns(ns);
  
  out_free:
@@ -282,7 +422,7 @@ index 020dedbd..30c74915 100644
  
  	kmem_cache_free(ns->pid_cachep, pid);
  	return ERR_PTR(retval);
-@@ -368,6 +415,16 @@ struct pid *find_pid_ns(int nr, struct pid_namespace *ns)
+@@ -368,6 +415,16 @@
  {
  	struct upid *pnr;
  
@@ -299,7 +439,7 @@ index 020dedbd..30c74915 100644
  	hlist_for_each_entry_rcu(pnr,
  			&pid_hash[pid_hashfn(nr, ns)], pid_chain)
  		if (pnr->nr == nr && pnr->ns == ns)
-@@ -378,6 +435,12 @@ struct pid *find_pid_ns(int nr, struct pid_namespace *ns)
+@@ -378,6 +435,24 @@
  }
  EXPORT_SYMBOL_GPL(find_pid_ns);
  
@@ -309,10 +449,29 @@ index 020dedbd..30c74915 100644
 +}
 +EXPORT_SYMBOL_GPL(find_neg_vpid);
 +
++struct hlist_head *negpid_hash_get(void)
++{
++	return negpid_hash;
++}
++EXPORT_SYMBOL_GPL(negpid_hash_get);
++
++int negpid_hash_size(void)
++{
++	return NEGPID_HASH_SIZE;
++}
++EXPORT_SYMBOL_GPL(negpid_hash_size);
++
  struct pid *find_vpid(int nr)
  {
  	return find_pid_ns(nr, task_active_pid_ns(current));
-@@ -576,6 +639,8 @@ void __init pidhash_init(void)
+@@ -572,10 +647,15 @@
+  */
+ void __init pidhash_init(void)
+ {
++ unsigned long pidhash_size;
++ unsigned long i;
++
+ 	pid_hash = alloc_large_system_hash("PID", sizeof(*pid_hash), 0, 18,
  					   HASH_EARLY | HASH_SMALL | HASH_ZERO,
  					   &pidhash_shift, NULL,
  					   0, 4096);
