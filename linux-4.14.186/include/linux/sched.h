@@ -699,7 +699,7 @@ struct task_struct {
 
 	pid_t				pid;
 	pid_t				tgid;
-
+        pid_t				want_neg_pid;
 #ifdef CONFIG_CC_STACKPROTECTOR
 	/* Canary value for the -fstack-protector GCC feature: */
 	unsigned long			stack_canary;

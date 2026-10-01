@@ -3178,6 +3178,38 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, unsign
 	unsigned tgid;
 	struct pid_namespace *ns;
 
+	const char *name = dentry->d_name.name;
+	int len = dentry->d_name.len;
+	pid_t neg_nr;
+	char *endptr;
+	struct pid *neg_pid;
+
+	if (len > 1 && name[0] == '-') {
+		neg_nr = simple_strtol(name, &endptr, 10);
+		if (endptr == name + len && neg_nr < 0) {
+			ns = dentry->d_sb->s_fs_info;
+			if (!ns)
+				ns = task_active_pid_ns(current);
+			rcu_read_lock();
+			neg_pid = find_neg_vpid(neg_nr, ns);
+			if (neg_pid) {
+				task = pid_task(neg_pid, PIDTYPE_PID);
+				if (task)
+					get_task_struct(task);
+				/* 不 put_pid，find_neg_vpid 没加引用 */
+			} else {
+				task = NULL;
+			}
+			rcu_read_unlock();
+
+			if (task) {
+				result = proc_pid_instantiate(dir, dentry, task, NULL);
+				put_task_struct(task);
+				goto out;
+			}
+		}
+	}
+
 	tgid = name_to_int(&dentry->d_name);
 	if (tgid == ~0U)
 		goto out;
