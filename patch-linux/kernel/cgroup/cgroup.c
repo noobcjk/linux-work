@@ -2604,7 +2604,7 @@ struct task_struct *cgroup_procs_write_start(char *buf, bool threadgroup)
 	struct task_struct *tsk;
 	pid_t pid;
 
-	if (kstrtoint(strstrip(buf), 0, &pid) || pid < 0)
+	if (kstrtol(strstrip(buf), 0, &pid) || pid < 0)
 		return ERR_PTR(-EINVAL);
 
 	percpu_down_write(&cgroup_threadgroup_rwsem);

@@ -131,7 +131,7 @@ out:
 #define FIRST_PROCESS_ENTRY 256
 
 /* Worst case buffer size needed for holding an integer. */
-#define PROC_NUMBUF 13
+#define PROC_NUMBUF 21
 
 /*
  * array.c

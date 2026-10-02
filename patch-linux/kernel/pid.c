@@ -49,7 +49,7 @@ static unsigned int pidhash_shift = 4;
 static struct hlist_head negpid_hash[NEGPID_HASH_SIZE];
 static DEFINE_SPINLOCK(negpid_hash_lock);
 
-static inline unsigned int negpid_hashfn(pid_t nr, struct pid_namespace *ns)
+static inline unsigned int negpid_hashfn(long nr, struct pid_namespace *ns)
 {
 	return ((unsigned int)(-nr) ^ (unsigned long)ns) & (NEGPID_HASH_SIZE - 1);
 }
@@ -322,11 +322,12 @@ void free_pid(struct pid *pid)
 	call_rcu(&pid->rcu, delayed_put_pid);
 }
 
-struct pid *alloc_pid(struct pid_namespace *ns, pid_t want_neg)
+struct pid *alloc_pid(struct pid_namespace *ns, long want_neg)
 {
 	struct pid *pid;
 	enum pid_type type;
-	int i, nr;
+	long i;
+        long nr;
 	struct pid_namespace *tmp;
 	struct upid *upid;
 	int retval = -ENOMEM;
@@ -411,7 +412,7 @@ void disable_pid_allocation(struct pid_namespace *ns)
 	spin_unlock_irq(&pidmap_lock);
 }
 
-struct pid *find_pid_ns(int nr, struct pid_namespace *ns)
+struct pid *find_pid_ns(long nr, struct pid_namespace *ns)
 {
 	struct upid *pnr;
 
@@ -453,7 +454,7 @@ int negpid_hash_size(void)
 }
 EXPORT_SYMBOL_GPL(negpid_hash_size);
 
-struct pid *find_vpid(int nr)
+struct pid *find_vpid(pid_t nr)
 {
 	return find_pid_ns(nr, task_active_pid_ns(current));
 }
@@ -626,7 +627,7 @@ EXPORT_SYMBOL_GPL(task_active_pid_ns);
  *
  * If there is a pid at nr this function is exactly the same as find_pid_ns.
  */
-struct pid *find_ge_pid(int nr, struct pid_namespace *ns)
+struct pid *find_ge_pid(pid_t nr, struct pid_namespace *ns)
 {
 	struct pid *pid;
 

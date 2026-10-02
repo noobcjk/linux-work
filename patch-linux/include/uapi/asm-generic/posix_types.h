@@ -25,7 +25,7 @@ typedef unsigned int	__kernel_mode_t;
 #endif
 
 #ifndef __kernel_pid_t
-typedef int		__kernel_pid_t;
+typedef long		__kernel_pid_t;
 #endif
 
 #ifndef __kernel_ipc_pid_t

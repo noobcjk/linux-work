@@ -190,9 +190,9 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 
 	seq_printf(m, "State:\t%s", get_task_state(p));
 
-	seq_printf(m, "\nTgid:\t%d", tgid);
+	seq_printf(m, "\nTgid:\t%ld", tgid);
 	seq_put_decimal_ull(m, "\nNgid:\t", ngid);
-	seq_printf(m, "\nPid:\t%d", pid_nr_ns(pid, ns));
+	seq_printf(m, "\nPid:\t%ld", pid_nr_ns(pid, ns));
 	seq_put_decimal_ull(m, "\nPPid:\t", ppid);
 	seq_put_decimal_ull(m, "\nTracerPid:\t", tpid);
 	seq_put_decimal_ull(m, "\nUid:\t", from_kuid_munged(user_ns, cred->uid));

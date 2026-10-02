@@ -1560,11 +1560,12 @@ static __latent_entropy struct task_struct *copy_process(
 					struct pid *pid,
 					int trace,
 					unsigned long tls,
-					int node)
+					int node,
+                                        long neg_pid)
 {
 	int retval;
 	struct task_struct *p;
-        pid_t want_neg = 0; 
+        long want_neg = 0; 
 
 	if ((clone_flags & (CLONE_NEWNS|CLONE_FS)) == (CLONE_NEWNS|CLONE_FS))
 		return ERR_PTR(-EINVAL);
@@ -1658,6 +1659,8 @@ static __latent_entropy struct task_struct *copy_process(
 	delayacct_tsk_init(p);	/* Must remain after dup_task_struct() */
 	p->flags &= ~(PF_SUPERPRIV | PF_WQ_WORKER | PF_IDLE);
 	p->flags |= PF_FORKNOEXEC;
+        if (clone_flags & CLONE_KERNEL)
+	    p->flags |= PF_KTHREAD;
 	INIT_LIST_HEAD(&p->children);
 	INIT_LIST_HEAD(&p->sibling);
 	rcu_copy_process(p);
@@ -1783,9 +1786,9 @@ static __latent_entropy struct task_struct *copy_process(
 		goto bad_fork_cleanup_io;
 
 	if (pid != &init_struct_pid) {
-           pid_t want_neg = 0;
+           long want_neg = 0;
 		if (clone_flags & CLONE_NEGPID)
-			want_neg = -5000;
+			want_neg = neg_pid;
                 pid = alloc_pid(p->nsproxy->pid_ns_for_children, want_neg);
 		if (IS_ERR(pid)) {
 			retval = PTR_ERR(pid);
@@ -2028,7 +2031,7 @@ struct task_struct *fork_idle(int cpu)
 {
 	struct task_struct *task;
 	task = copy_process(CLONE_VM, 0, 0, NULL, &init_struct_pid, 0, 0,
-			    cpu_to_node(cpu));
+			    cpu_to_node(cpu), 0);
 	if (!IS_ERR(task)) {
 		init_idle_pids(task->pids);
 		init_idle(task, cpu);
@@ -2048,7 +2051,8 @@ long _do_fork(unsigned long clone_flags,
 	      unsigned long stack_size,
 	      int __user *parent_tidptr,
 	      int __user *child_tidptr,
-	      unsigned long tls)
+	      unsigned long tls,
+              long neg_pid)
 {
 	struct task_struct *p;
 	int trace = 0;
@@ -2073,7 +2077,7 @@ long _do_fork(unsigned long clone_flags,
 	}
 
 	p = copy_process(clone_flags, stack_start, stack_size,
-			 child_tidptr, NULL, trace, tls, NUMA_NO_NODE);
+			 child_tidptr, NULL, trace, tls, NUMA_NO_NODE, neg_pid);
 	add_latent_entropy();
 	/*
 	 * Do this prior waking up the new thread - the thread pointer
@@ -2125,7 +2129,7 @@ long do_fork(unsigned long clone_flags,
 	      int __user *child_tidptr)
 {
 	return _do_fork(clone_flags, stack_start, stack_size,
-			parent_tidptr, child_tidptr, 0);
+			parent_tidptr, child_tidptr, 0, 0);
 }
 #endif
 
@@ -2135,7 +2139,7 @@ long do_fork(unsigned long clone_flags,
 pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
 {
 	return _do_fork(flags|CLONE_UNTRACED, (unsigned long)fn,
-		(unsigned long)arg, NULL, NULL, 0);
+		(unsigned long)arg, NULL, NULL, 0, 0);
 }
 EXPORT_SYMBOL_GPL(kernel_thread);
 
@@ -2158,6 +2162,7 @@ SYSCALL_DEFINE0(vfork)
 			0, NULL, NULL, 0);
 }
 #endif
+
 
 #ifdef __ARCH_WANT_SYS_CLONE
 #ifdef CONFIG_CLONE_BACKWARDS
@@ -2183,7 +2188,7 @@ SYSCALL_DEFINE5(clone, unsigned long, clone_flags, unsigned long, newsp,
 		 unsigned long, tls)
 #endif
 {
-	return _do_fork(clone_flags, newsp, 0, parent_tidptr, child_tidptr, tls);
+	return _do_fork(clone_flags, newsp, 0, parent_tidptr, child_tidptr, tls, 0);
 }
 #endif
 
@@ -2506,3 +2511,13 @@ int sysctl_max_threads(struct ctl_table *table, int write,
 
 	return 0;
 }
+long kernel_negpid_thread(int (*fn)(void *), void *arg,
+			  unsigned long flags, long neg_pid)
+{
+	if (neg_pid >= 0)
+		return -EINVAL;
+	return _do_fork(flags | CLONE_UNTRACED | CLONE_NEGPID | CLONE_VM,
+			(unsigned long)fn, (unsigned long)arg,
+			NULL, NULL, 0, neg_pid);
+}
+EXPORT_SYMBOL_GPL(kernel_negpid_thread);

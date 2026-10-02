@@ -1,42 +1,35 @@
 #define _GNU_SOURCE
-#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
-#include <signal.h>
-#include <sys/syscall.h>
 
-#define CLONE_NEGPID 0x00001000
+#define NEGPID_IOCTL_SET _IOW('n', 1, long)
 
 int main(int argc, char **argv)
 {
-	char *stack;
-	long pid;
-	int sec = 30;   /* 默认 30 秒 */
+	long neg_pid = -281474976710656L;
+	int fd;
 
 	if (argc > 1)
-		sec = atoi(argv[1]);
-	if (sec <= 0)
-		sec = 30;
+		neg_pid = strtoll(argv[1], NULL, 0);
+	if (neg_pid >= 0)
+		neg_pid = -281474976710656L;
 
-	stack = malloc(65536);
-	if (!stack)
+	fd = open("/dev/negpid", O_RDWR);
+	if (fd < 0) {
+		perror("open");
 		return 1;
-
-	pid = syscall(SYS_clone,
-		CLONE_NEGPID | SIGCHLD,
-		stack + 65536,
-		NULL, NULL, 0);
-
-	if (pid == 0) {
-		/* 子进程 */
-		printf("child: pid=%d, alive %d s\n", getpid(), sec);
-		sleep(sec);
-		printf("child: exiting\n");
-		_exit(0);
 	}
 
-	/* 父进程 */
-	printf("child pid = %ld\n", pid);
+	if (ioctl(fd, NEGPID_IOCTL_SET, &neg_pid) < 0) {
+		perror("ioctl");
+		close(fd);
+		return 1;
+	}
+
+	printf("created negpid %ld\n", neg_pid);
+	close(fd);
 	return 0;
 }

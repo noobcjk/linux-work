@@ -430,7 +430,7 @@ static void *cgroup_pidlist_start(struct seq_file *s, loff_t *pos)
 	struct cgroup_pidlist *l;
 	enum cgroup_filetype type = seq_cft(s)->private;
 	int index = 0, pid = *pos;
-	int *iter, ret;
+	pid_t *iter, ret;
 
 	mutex_lock(&cgrp->pidlist_mutex);
 

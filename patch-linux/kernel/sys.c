@@ -839,7 +839,7 @@ change_okay:
  */
 SYSCALL_DEFINE0(getpid)
 {
-	return task_tgid_vnr(current);
+	return (long)task_tgid_vnr(current);
 }
 
 /* Thread ID - the internal kernel "pid" */

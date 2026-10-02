@@ -52,7 +52,7 @@ enum pid_type
 
 struct upid {
 	/* Try to keep pid_chain in the same cacheline as nr for find_vpid */
-	int nr;
+	long nr;
 	struct pid_namespace *ns;
 	struct hlist_node pid_chain;
         struct hlist_node neg_pid_chain;
@@ -113,18 +113,18 @@ extern struct pid_namespace init_pid_ns;
  *
  * see also find_task_by_vpid() set in include/linux/sched.h
  */
-extern struct pid *find_pid_ns(int nr, struct pid_namespace *ns);
-extern struct pid *find_vpid(int nr);
+extern struct pid *find_pid_ns(long nr, struct pid_namespace *ns);
+extern struct pid *find_vpid(pid_t nr);
 
 /*
  * Lookup a PID in the hash table, and return with it's count elevated.
  */
-extern struct pid *find_get_pid(int nr);
-extern struct pid *find_ge_pid(int nr, struct pid_namespace *);
+extern struct pid *find_get_pid(pid_t nr);
+extern struct pid *find_ge_pid(pid_t nr, struct pid_namespace *);
 int next_pidmap(struct pid_namespace *pid_ns, unsigned int last);
 
-extern struct pid *alloc_pid(struct pid_namespace *ns, pid_t want_neg);
-struct pid *find_neg_vpid(pid_t vnr, struct pid_namespace *ns);
+extern struct pid *alloc_pid(struct pid_namespace *ns, long want_neg);
+struct pid *find_neg_vpid(long vnr, struct pid_namespace *ns);
 extern void free_pid(struct pid *pid);
 extern void disable_pid_allocation(struct pid_namespace *ns);
 
@@ -170,14 +170,14 @@ static inline bool is_child_reaper(struct pid *pid)
 
 static inline pid_t pid_nr(struct pid *pid)
 {
-	pid_t nr = 0;
+	long nr = 0;
 	if (pid)
 		nr = pid->numbers[0].nr;
 	return nr;
 }
 
-pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns);
-pid_t pid_vnr(struct pid *pid);
+long pid_nr_ns(struct pid *pid, struct pid_namespace *ns);
+long pid_vnr(struct pid *pid);
 
 #define do_each_pid_task(pid, type, task)				\
 	do {								\

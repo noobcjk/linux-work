@@ -3721,7 +3721,7 @@ static int proc_negpid_readdir(struct file *file, struct dir_context *ctx)
 				continue;
 			get_task_struct(task);
 
-			len = snprintf(name, sizeof(name), "%d", upid->nr);
+			len = snprintf(name, sizeof(name), "%ld", upid->nr);
 			ctx->pos = PID_MAX_LIMIT + TGID_OFFSET + idx;
 			rcu_read_unlock();
 
