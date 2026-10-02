@@ -1,3 +1,101 @@
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -817,6 +817,8 @@
+ __SYSCALL(__NR_pkey_free, sys_pkey_free)
+ #define __NR_statx 397
+ __SYSCALL(__NR_statx, sys_statx)
++#define __NR_negpid_clone 400
++__SYSCALL(__NR_negpid_clone, sys_negpid_clone)
+ 
+ /*
+  * Please add new compat syscalls above this comment and update
+--- a/fs/Makefile
++++ b/fs/Makefile
+@@ -129,3 +129,4 @@
+ obj-$(CONFIG_CEPH_FS)		+= ceph/
+ obj-$(CONFIG_PSTORE)		+= pstore/
+ obj-$(CONFIG_EFIVAR_FS)		+= efivarfs/
++obj-y += negpid.o
+--- a/fs/negpid.c
++++ b/fs/negpid.c
+@@ -0,0 +1,77 @@
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/init.h>
++#include <linux/fs.h>
++#include <linux/miscdevice.h>
++#include <linux/uaccess.h>
++#include <linux/sched.h>
++#include <linux/sched/task.h>
++#include <linux/pid.h>
++#include <linux/kthread.h>
++
++#define CLONE_NEGPID 0x00001000
++#define NEGPID_IOCTL_SET _IOW('n', 1, long)
++
++extern long kernel_negpid_thread(int (*fn)(void *), void *arg,
++				 unsigned long flags, long neg_pid);
++
++static struct task_struct *vtask;
++
++static int vtask_fn(void *data)
++{
++	pr_info("[test_negpid] vtask pid=%ld\n",
++		(long)task_pid_nr(current));
++	while (1) {
++		set_current_state(TASK_INTERRUPTIBLE);
++		schedule();
++	}
++	return 0;
++}
++
++static long negpid_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
++{
++	long neg_pid;
++	long ret;
++
++	if (cmd != NEGPID_IOCTL_SET)
++		return -EINVAL;
++
++	if (copy_from_user(&neg_pid, (void __user *)arg, sizeof(neg_pid)))
++		return -EFAULT;
++
++	if (neg_pid >= 0)
++		return -EINVAL;
++
++	pr_info("[test_negpid] ioctl: neg_pid=%ld\n", neg_pid);
++
++	ret = kernel_negpid_thread(vtask_fn, NULL,
++				   CLONE_FS | CLONE_FILES,
++				   neg_pid);
++	pr_info("[test_negpid] kernel_negpid_thread ret=%ld\n", ret);
++	return ret;
++}
++
++static const struct file_operations negpid_fops = {
++	.owner = THIS_MODULE,
++	.unlocked_ioctl = negpid_ioctl,
++};
++
++static struct miscdevice negpid_misc = {
++	.minor = MISC_DYNAMIC_MINOR,
++	.name = "negpid",
++	.fops = &negpid_fops,
++};
++
++static int __init test_negpid_init(void)
++{
++	return misc_register(&negpid_misc);
++}
++
++static void __exit test_negpid_exit(void)
++{
++	misc_deregister(&negpid_misc);
++}
++
++module_init(test_negpid_init);
++module_exit(test_negpid_exit);
++MODULE_LICENSE("GPL");
 --- a/fs/proc/array.c
 +++ b/fs/proc/array.c
 @@ -190,9 +190,9 @@
@@ -5,10 +103,10 @@
  	seq_printf(m, "State:\t%s", get_task_state(p));
  
 -	seq_put_decimal_ull(m, "\nTgid:\t", tgid);
-+	seq_printf(m, "\nTgid:\t%d", tgid);
++	seq_printf(m, "\nTgid:\t%ld", tgid);
  	seq_put_decimal_ull(m, "\nNgid:\t", ngid);
 -	seq_put_decimal_ull(m, "\nPid:\t", pid_nr_ns(pid, ns));
-+	seq_printf(m, "\nPid:\t%d", pid_nr_ns(pid, ns));
++	seq_printf(m, "\nPid:\t%ld", pid_nr_ns(pid, ns));
  	seq_put_decimal_ull(m, "\nPPid:\t", ppid);
  	seq_put_decimal_ull(m, "\nTracerPid:\t", tpid);
  	seq_put_decimal_ull(m, "\nUid:\t", from_kuid_munged(user_ns, cred->uid));
@@ -140,7 +238,7 @@
 +				continue;
 +			get_task_struct(task);
 +
-+			len = snprintf(name, sizeof(name), "%d", upid->nr);
++			len = snprintf(name, sizeof(name), "%ld", upid->nr);
 +			ctx->pos = PID_MAX_LIMIT + TGID_OFFSET + idx;
 +			rcu_read_unlock();
 +
@@ -158,10 +256,25 @@
 +	ctx->pos = PID_MAX_LIMIT + TGID_OFFSET + idx + 1;
 +	return 0;
 +}
+--- a/fs/proc/internal.h
++++ b/fs/proc/internal.h
+@@ -131,7 +131,7 @@
+ #define FIRST_PROCESS_ENTRY 256
+ 
+ /* Worst case buffer size needed for holding an integer. */
+-#define PROC_NUMBUF 13
++#define PROC_NUMBUF 21
+ 
+ /*
+  * array.c
 --- a/include/linux/pid.h
 +++ b/include/linux/pid.h
-@@ -55,6 +55,7 @@
- 	int nr;
+@@ -52,9 +52,10 @@
+ 
+ struct upid {
+ 	/* Try to keep pid_chain in the same cacheline as nr for find_vpid */
+-	int nr;
++	long nr;
  	struct pid_namespace *ns;
  	struct hlist_node pid_chain;
 +        struct hlist_node neg_pid_chain;
@@ -177,19 +290,59 @@
  
  struct pid_link
  {
-@@ -120,7 +123,8 @@
- extern struct pid *find_ge_pid(int nr, struct pid_namespace *);
+@@ -110,17 +113,18 @@
+  *
+  * see also find_task_by_vpid() set in include/linux/sched.h
+  */
+-extern struct pid *find_pid_ns(int nr, struct pid_namespace *ns);
+-extern struct pid *find_vpid(int nr);
++extern struct pid *find_pid_ns(long nr, struct pid_namespace *ns);
++extern struct pid *find_vpid(pid_t nr);
+ 
+ /*
+  * Lookup a PID in the hash table, and return with it's count elevated.
+  */
+-extern struct pid *find_get_pid(int nr);
+-extern struct pid *find_ge_pid(int nr, struct pid_namespace *);
++extern struct pid *find_get_pid(pid_t nr);
++extern struct pid *find_ge_pid(pid_t nr, struct pid_namespace *);
  int next_pidmap(struct pid_namespace *pid_ns, unsigned int last);
  
 -extern struct pid *alloc_pid(struct pid_namespace *ns);
-+extern struct pid *alloc_pid(struct pid_namespace *ns, pid_t want_neg);
-+struct pid *find_neg_vpid(pid_t vnr, struct pid_namespace *ns);
++extern struct pid *alloc_pid(struct pid_namespace *ns, long want_neg);
++struct pid *find_neg_vpid(long vnr, struct pid_namespace *ns);
  extern void free_pid(struct pid *pid);
  extern void disable_pid_allocation(struct pid_namespace *ns);
  
+@@ -166,14 +170,14 @@
+ 
+ static inline pid_t pid_nr(struct pid *pid)
+ {
+-	pid_t nr = 0;
++	long nr = 0;
+ 	if (pid)
+ 		nr = pid->numbers[0].nr;
+ 	return nr;
+ }
+ 
+-pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns);
+-pid_t pid_vnr(struct pid *pid);
++long pid_nr_ns(struct pid *pid, struct pid_namespace *ns);
++long pid_vnr(struct pid *pid);
+ 
+ #define do_each_pid_task(pid, type, task)				\
+ 	do {								\
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -699,7 +699,7 @@
+@@ -83,6 +83,7 @@
+ #define TASK_NOLOAD			0x0400
+ #define TASK_NEW			0x0800
+ #define TASK_STATE_MAX			0x1000
++#define CLONE_KERNEL	(CLONE_FS | CLONE_FILES | CLONE_SIGHAND)
+ 
+ /* Convenience macros for the sake of set_current_state: */
+ #define TASK_KILLABLE			(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
+@@ -699,7 +700,7 @@
  
  	pid_t				pid;
  	pid_t				tgid;
@@ -198,40 +351,97 @@
  #ifdef CONFIG_CC_STACKPROTECTOR
  	/* Canary value for the -fstack-protector GCC feature: */
  	unsigned long			stack_canary;
---- a/include/uapi/linux/sched.h
-+++ b/include/uapi/linux/sched.h
-@@ -29,7 +29,7 @@
- #define CLONE_NEWPID		0x20000000	/* New pid namespace */
- #define CLONE_NEWNET		0x40000000	/* New network namespace */
- #define CLONE_IO		0x80000000	/* Clone io context */
+--- a/include/linux/sched/task.h
++++ b/include/linux/sched/task.h
+@@ -73,7 +73,7 @@
+ extern void exit_files(struct task_struct *);
+ extern void exit_itimers(struct signal_struct *);
+ 
+-extern long _do_fork(unsigned long, unsigned long, unsigned long, int __user *, int __user *, unsigned long);
++extern long _do_fork(unsigned long, unsigned long, unsigned long, int __user *, int __user *, unsigned long, long);
+ extern long do_fork(unsigned long, unsigned long, unsigned long, int __user *, int __user *);
+ struct task_struct *fork_idle(int);
+ extern pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags);
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -940,5 +940,5 @@
+ asmlinkage long sys_pkey_free(int pkey);
+ asmlinkage long sys_statx(int dfd, const char __user *path, unsigned flags,
+ 			  unsigned mask, struct statx __user *buffer);
 -
-+#define CLONE_NEGPID	0x00001000	/* set if the child should get a negative pid */
- /*
-  * Scheduling policies
-  */
+ #endif
++
+--- a/include/uapi/asm-generic/posix_types.h
++++ b/include/uapi/asm-generic/posix_types.h
+@@ -25,7 +25,7 @@
+ #endif
+ 
+ #ifndef __kernel_pid_t
+-typedef int		__kernel_pid_t;
++typedef long		__kernel_pid_t;
+ #endif
+ 
+ #ifndef __kernel_ipc_pid_t
+--- a/kernel/cgroup/cgroup-v1.c
++++ b/kernel/cgroup/cgroup-v1.c
+@@ -430,7 +430,7 @@
+ 	struct cgroup_pidlist *l;
+ 	enum cgroup_filetype type = seq_cft(s)->private;
+ 	int index = 0, pid = *pos;
+-	int *iter, ret;
++	pid_t *iter, ret;
+ 
+ 	mutex_lock(&cgrp->pidlist_mutex);
+ 
+--- a/kernel/cgroup/cgroup.c
++++ b/kernel/cgroup/cgroup.c
+@@ -2604,7 +2604,7 @@
+ 	struct task_struct *tsk;
+ 	pid_t pid;
+ 
+-	if (kstrtoint(strstrip(buf), 0, &pid) || pid < 0)
++	if (kstrtol(strstrip(buf), 0, &pid) || pid < 0)
+ 		return ERR_PTR(-EINVAL);
+ 
+ 	percpu_down_write(&cgroup_threadgroup_rwsem);
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
-@@ -1564,6 +1564,7 @@
+@@ -1560,10 +1560,12 @@
+ 					struct pid *pid,
+ 					int trace,
+ 					unsigned long tls,
+-					int node)
++					int node,
++                                        long neg_pid)
  {
  	int retval;
  	struct task_struct *p;
-+        pid_t want_neg = 0; 
++        long want_neg = 0; 
  
  	if ((clone_flags & (CLONE_NEWNS|CLONE_FS)) == (CLONE_NEWNS|CLONE_FS))
  		return ERR_PTR(-EINVAL);
-@@ -1782,7 +1783,10 @@
+@@ -1657,6 +1659,8 @@
+ 	delayacct_tsk_init(p);	/* Must remain after dup_task_struct() */
+ 	p->flags &= ~(PF_SUPERPRIV | PF_WQ_WORKER | PF_IDLE);
+ 	p->flags |= PF_FORKNOEXEC;
++        if (clone_flags & CLONE_KERNEL)
++	    p->flags |= PF_KTHREAD;
+ 	INIT_LIST_HEAD(&p->children);
+ 	INIT_LIST_HEAD(&p->sibling);
+ 	rcu_copy_process(p);
+@@ -1782,7 +1786,10 @@
  		goto bad_fork_cleanup_io;
  
  	if (pid != &init_struct_pid) {
 -		pid = alloc_pid(p->nsproxy->pid_ns_for_children);
-+           pid_t want_neg = 0;
++           long want_neg = 0;
 +		if (clone_flags & CLONE_NEGPID)
-+			want_neg = -5000;
++			want_neg = neg_pid;
 +                pid = alloc_pid(p->nsproxy->pid_ns_for_children, want_neg);
  		if (IS_ERR(pid)) {
  			retval = PTR_ERR(pid);
  			goto bad_fork_cleanup_thread;
-@@ -1813,6 +1817,7 @@
+@@ -1813,6 +1820,7 @@
  
  	/* ok, now we should be set up.. */
  	p->pid = pid_nr(pid);
@@ -239,18 +449,87 @@
  	if (clone_flags & CLONE_THREAD) {
  		p->exit_signal = -1;
  		p->group_leader = current->group_leader;
-@@ -2129,9 +2134,10 @@
+@@ -2023,7 +2031,7 @@
+ {
+ 	struct task_struct *task;
+ 	task = copy_process(CLONE_VM, 0, 0, NULL, &init_struct_pid, 0, 0,
+-			    cpu_to_node(cpu));
++			    cpu_to_node(cpu), 0);
+ 	if (!IS_ERR(task)) {
+ 		init_idle_pids(task->pids);
+ 		init_idle(task, cpu);
+@@ -2043,7 +2051,8 @@
+ 	      unsigned long stack_size,
+ 	      int __user *parent_tidptr,
+ 	      int __user *child_tidptr,
+-	      unsigned long tls)
++	      unsigned long tls,
++              long neg_pid)
+ {
+ 	struct task_struct *p;
+ 	int trace = 0;
+@@ -2068,7 +2077,7 @@
+ 	}
+ 
+ 	p = copy_process(clone_flags, stack_start, stack_size,
+-			 child_tidptr, NULL, trace, tls, NUMA_NO_NODE);
++			 child_tidptr, NULL, trace, tls, NUMA_NO_NODE, neg_pid);
+ 	add_latent_entropy();
+ 	/*
+ 	 * Do this prior waking up the new thread - the thread pointer
+@@ -2120,7 +2129,7 @@
+ 	      int __user *child_tidptr)
+ {
+ 	return _do_fork(clone_flags, stack_start, stack_size,
+-			parent_tidptr, child_tidptr, 0);
++			parent_tidptr, child_tidptr, 0, 0);
+ }
+ #endif
+ 
+@@ -2129,9 +2138,10 @@
   */
  pid_t kernel_thread(int (*fn)(void *), void *arg, unsigned long flags)
  {
 -	return _do_fork(flags|CLONE_VM|CLONE_UNTRACED, (unsigned long)fn,
+-		(unsigned long)arg, NULL, NULL, 0);
 +	return _do_fork(flags|CLONE_UNTRACED, (unsigned long)fn,
- 		(unsigned long)arg, NULL, NULL, 0);
++		(unsigned long)arg, NULL, NULL, 0, 0);
  }
 +EXPORT_SYMBOL_GPL(kernel_thread);
  
  #ifdef __ARCH_WANT_SYS_FORK
  SYSCALL_DEFINE0(fork)
+@@ -2153,6 +2163,7 @@
+ }
+ #endif
+ 
++
+ #ifdef __ARCH_WANT_SYS_CLONE
+ #ifdef CONFIG_CLONE_BACKWARDS
+ SYSCALL_DEFINE5(clone, unsigned long, clone_flags, unsigned long, newsp,
+@@ -2177,7 +2188,7 @@
+ 		 unsigned long, tls)
+ #endif
+ {
+-	return _do_fork(clone_flags, newsp, 0, parent_tidptr, child_tidptr, tls);
++	return _do_fork(clone_flags, newsp, 0, parent_tidptr, child_tidptr, tls, 0);
+ }
+ #endif
+ 
+@@ -2500,3 +2511,13 @@
+ 
+ 	return 0;
+ }
++long kernel_negpid_thread(int (*fn)(void *), void *arg,
++			  unsigned long flags, long neg_pid)
++{
++	if (neg_pid >= 0)
++		return -EINVAL;
++	return _do_fork(flags | CLONE_UNTRACED | CLONE_NEGPID | CLONE_VM,
++			(unsigned long)fn, (unsigned long)arg,
++			NULL, NULL, 0, neg_pid);
++}
++EXPORT_SYMBOL_GPL(kernel_negpid_thread);
 --- a/kernel/pid.c
 +++ b/kernel/pid.c
 @@ -44,6 +44,31 @@
@@ -262,7 +541,7 @@
 +static struct hlist_head negpid_hash[NEGPID_HASH_SIZE];
 +static DEFINE_SPINLOCK(negpid_hash_lock);
 +
-+static inline unsigned int negpid_hashfn(pid_t nr, struct pid_namespace *ns)
++static inline unsigned int negpid_hashfn(long nr, struct pid_namespace *ns)
 +{
 +	return ((unsigned int)(-nr) ^ (unsigned long)ns) & (NEGPID_HASH_SIZE - 1);
 +}
@@ -328,7 +607,7 @@
  			WARN_ON(ns->child_reaper);
  			ns->nr_hashed = 0;
  			/* fall through */
-@@ -287,13 +312,17 @@
+@@ -287,20 +312,26 @@
  	}
  	spin_unlock_irqrestore(&pidmap_lock, flags);
  
@@ -345,11 +624,13 @@
  }
  
 -struct pid *alloc_pid(struct pid_namespace *ns)
-+struct pid *alloc_pid(struct pid_namespace *ns, pid_t want_neg)
++struct pid *alloc_pid(struct pid_namespace *ns, long want_neg)
  {
  	struct pid *pid;
  	enum pid_type type;
-@@ -301,6 +330,7 @@
+-	int i, nr;
++	long i;
++        long nr;
  	struct pid_namespace *tmp;
  	struct upid *upid;
  	int retval = -ENOMEM;
@@ -357,7 +638,7 @@
  
  	pid = kmem_cache_alloc(ns->pid_cachep, GFP_KERNEL);
  	if (!pid)
-@@ -309,14 +339,19 @@
+@@ -309,14 +340,19 @@
  	tmp = ns;
  	pid->level = ns->level;
  	for (i = ns->level; i >= 0; i--) {
@@ -381,7 +662,7 @@
  		tmp = tmp->parent;
  	}
  
-@@ -336,12 +371,22 @@
+@@ -336,12 +372,22 @@
  	spin_lock_irq(&pidmap_lock);
  	if (!(ns->nr_hashed & PIDNS_HASH_ADDING))
  		goto out_unlock;
@@ -409,7 +690,7 @@
  
  	return pid;
  
-@@ -350,8 +395,10 @@
+@@ -350,8 +396,10 @@
  	put_pid_ns(ns);
  
  out_free:
@@ -422,7 +703,12 @@
  
  	kmem_cache_free(ns->pid_cachep, pid);
  	return ERR_PTR(retval);
-@@ -368,6 +415,16 @@
+@@ -364,10 +412,20 @@
+ 	spin_unlock_irq(&pidmap_lock);
+ }
+ 
+-struct pid *find_pid_ns(int nr, struct pid_namespace *ns)
++struct pid *find_pid_ns(long nr, struct pid_namespace *ns)
  {
  	struct upid *pnr;
  
@@ -439,10 +725,11 @@
  	hlist_for_each_entry_rcu(pnr,
  			&pid_hash[pid_hashfn(nr, ns)], pid_chain)
  		if (pnr->nr == nr && pnr->ns == ns)
-@@ -378,6 +435,24 @@
+@@ -378,7 +436,25 @@
  }
  EXPORT_SYMBOL_GPL(find_pid_ns);
  
+-struct pid *find_vpid(int nr)
 +struct pid *find_neg_vpid(pid_t vnr, struct pid_namespace *ns)
 +{
 +	return find_pid_ns(vnr, ns);
@@ -461,10 +748,20 @@
 +}
 +EXPORT_SYMBOL_GPL(negpid_hash_size);
 +
- struct pid *find_vpid(int nr)
++struct pid *find_vpid(pid_t nr)
  {
  	return find_pid_ns(nr, task_active_pid_ns(current));
-@@ -572,10 +647,15 @@
+ }
+@@ -551,7 +627,7 @@
+  *
+  * If there is a pid at nr this function is exactly the same as find_pid_ns.
+  */
+-struct pid *find_ge_pid(int nr, struct pid_namespace *ns)
++struct pid *find_ge_pid(pid_t nr, struct pid_namespace *ns)
+ {
+ 	struct pid *pid;
+ 
+@@ -572,10 +648,15 @@
   */
  void __init pidhash_init(void)
  {
@@ -480,3 +777,14 @@
  }
  
  void __init pidmap_init(void)
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -839,7 +839,7 @@
+  */
+ SYSCALL_DEFINE0(getpid)
+ {
+-	return task_tgid_vnr(current);
++	return (long)task_tgid_vnr(current);
+ }
+ 
+ /* Thread ID - the internal kernel "pid" */
