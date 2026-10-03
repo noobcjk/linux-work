@@ -247,6 +247,7 @@ config PGTABLE_LEVELS
 	default 3 if ARM64_64K_PAGES && ARM64_VA_BITS_48
 	default 3 if ARM64_4K_PAGES && ARM64_VA_BITS_39
 	default 3 if ARM64_16K_PAGES && ARM64_VA_BITS_47
+        default 3 if ARM64_64K_PAGES && ARM64_VA_BITS_52_TRANSPLANT
 	default 4 if !ARM64_64K_PAGES && ARM64_VA_BITS_48
 
 config ARCH_SUPPORTS_UPROBES
@@ -617,6 +618,13 @@ config ARM64_VA_BITS_47
 config ARM64_VA_BITS_48
 	bool "48-bit"
 
+config ARM64_VA_BITS_52_TRANSPLANT
+	bool "52-bit (ARMv8.2-LVA)"
+	depends on ARM64_64K_PAGES
+	help
+	  Enable 52-bit virtual addressing (transplant from Linux 5.4).
+	  Requires 64KB pages and hardware with ARMv8.2-LVA.
+
 endchoice
 
 config ARM64_VA_BITS
@@ -626,6 +634,7 @@ config ARM64_VA_BITS
 	default 42 if ARM64_VA_BITS_42
 	default 47 if ARM64_VA_BITS_47
 	default 48 if ARM64_VA_BITS_48
+        default 52 if ARM64_VA_BITS_52_TRANSPLANT
 
 config CPU_BIG_ENDIAN
        bool "Build big-endian kernel"

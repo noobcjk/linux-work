@@ -1,3 +1,4 @@
+#include <asm/memory.h>
 /*
  * Copyright (C) 2012 ARM Ltd.
  *
@@ -15,6 +16,12 @@
  */
 #ifndef __ASM_PGTABLE_HWDEF_H
 #define __ASM_PGTABLE_HWDEF_H
+
+#ifdef CONFIG_ARM64_VA_BITS_52_TRANSPLANT
+#define MAX_USER_VA_BITS	52
+#else
+#define MAX_USER_VA_BITS	VA_BITS
+#endif
 
 /*
  * Number of page-table levels required to address 'va_bits' wide
@@ -78,7 +85,11 @@
 #define PGDIR_SHIFT		ARM64_HW_PGTABLE_LEVEL_SHIFT(4 - CONFIG_PGTABLE_LEVELS)
 #define PGDIR_SIZE		(_AC(1, UL) << PGDIR_SHIFT)
 #define PGDIR_MASK		(~(PGDIR_SIZE-1))
+#ifdef CONFIG_ARM64_VA_BITS_52_TRANSPLANT
+#define PTRS_PER_PGD		(1 << (52 - PGDIR_SHIFT))
+#else
 #define PTRS_PER_PGD		(1 << (VA_BITS - PGDIR_SHIFT))
+#endif
 
 /*
  * Section address mask and size definitions.

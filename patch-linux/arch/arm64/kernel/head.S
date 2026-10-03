@@ -244,7 +244,7 @@ __create_page_tables:
 	adrp	x0, idmap_pg_dir
 	adrp	x3, __idmap_text_start		// __pa(__idmap_text_start)
 
-#ifndef CONFIG_ARM64_VA_BITS_48
+#if !defined(CONFIG_ARM64_VA_BITS_48) && !defined(CONFIG_ARM64_VA_BITS_52_TRANSPLANT)
 #define EXTRA_SHIFT	(PGDIR_SHIFT + PAGE_SHIFT - 3)
 #define EXTRA_PTRS	(1 << (48 - EXTRA_SHIFT))
 
