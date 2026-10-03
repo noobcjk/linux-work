@@ -1198,6 +1198,17 @@ config KALLSYMS_ALL
 
 	   Say N unless you really need all symbols.
 
+config KALLSYMS_XOR
+	bool "Obfuscate kallsyms addresses at runtime"
+	depends on KALLSYMS
+	help
+	  XOR-obfuscate kernel symbol addresses in /proc/kallsyms
+	  with a random key generated at boot. The key is printed
+	  to dmesg as 32 chars (16 random + 16 hex key).
+
+	  If unsure, say N.
+          Mod -- by Mal
+
 config KALLSYMS_ABSOLUTE_PERCPU
 	bool
 	depends on KALLSYMS

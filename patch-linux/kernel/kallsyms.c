@@ -25,7 +25,9 @@
 #include <linux/slab.h>
 #include <linux/filter.h>
 #include <linux/compiler.h>
-
+#ifdef CONFIG_KALLSYMS_XOR
+#include <linux/random.h>
+#endif
 #include <asm/sections.h>
 
 /*
@@ -35,6 +37,10 @@
 extern const unsigned long kallsyms_addresses[] __weak;
 extern const int kallsyms_offsets[] __weak;
 extern const u8 kallsyms_names[] __weak;
+#ifdef CONFIG_KALLSYMS_XOR
+static unsigned long kallsyms_xor_key __read_mostly;
+static char kallsyms_xor_banner[33];
+#endif
 
 /*
  * Tell the compiler that the count isn't in the small data section if the arch
@@ -513,7 +519,11 @@ static unsigned long get_ksymbol_core(struct kallsym_iter *iter)
 	unsigned off = iter->nameoff;
 
 	iter->module_name[0] = '\0';
+        #ifdef CONFIG_KALLSYMS_XOR
+	iter->value = kallsyms_sym_address(iter->pos) ^ kallsyms_xor_key;
+        #else
 	iter->value = kallsyms_sym_address(iter->pos);
+        #endif
 
 	iter->type = kallsyms_get_symbol_type(off);
 
@@ -586,24 +596,32 @@ static int s_show(struct seq_file *m, void *p)
 {
 	struct kallsym_iter *iter = m->private;
 
-	/* Some debugging symbols have no name.  Ignore them. */
 	if (!iter->name[0])
 		return 0;
 
+#ifdef CONFIG_KALLSYMS_XOR
 	if (iter->module_name[0]) {
 		char type;
-
-		/*
-		 * Label it "global" if it is exported,
-		 * "local" if not exported.
-		 */
+		type = iter->exported ? toupper(iter->type) :
+					tolower(iter->type);
+		seq_printf(m, "%016lx %c %s\t[%s]\n",
+			   iter->value, type, iter->name, iter->module_name);
+	} else {
+		seq_printf(m, "%016lx %c %s\n",
+			   iter->value, iter->type, iter->name);
+	}
+#else
+	if (iter->module_name[0]) {
+		char type;
 		type = iter->exported ? toupper(iter->type) :
 					tolower(iter->type);
 		seq_printf(m, "%pK %c %s\t[%s]\n", (void *)iter->value,
 			   type, iter->name, iter->module_name);
-	} else
+	} else {
 		seq_printf(m, "%pK %c %s\n", (void *)iter->value,
 			   iter->type, iter->name);
+	}
+#endif
 	return 0;
 }
 
@@ -663,3 +681,34 @@ static int __init kallsyms_init(void)
 	return 0;
 }
 device_initcall(kallsyms_init);
+
+#ifdef CONFIG_KALLSYMS_XOR
+static int __init kallsyms_xor_init(void)
+{
+	char hex[] = "HK&2e5,k9lW()_-X";
+	int i;
+
+	get_random_bytes(&kallsyms_xor_key, sizeof(kallsyms_xor_key));
+
+	for (i = 0; i < 16; i++) {
+		u8 r;
+		get_random_bytes(&r, 1);
+		if ((r & 3) == 0)
+			kallsyms_xor_banner[i] = 'A' + (r % 26);
+		else if ((r & 3) == 1)
+			kallsyms_xor_banner[i] = '$' + (r % 26);
+		else
+			kallsyms_xor_banner[i] = '6' + (r % 10);
+	}
+
+	for (i = 0; i < 16; i++) {
+		u8 nibble = (kallsyms_xor_key >> ((15 - i) * 4)) & 0xf;
+		kallsyms_xor_banner[16 + i] = hex[nibble];
+	}
+	kallsyms_xor_banner[32] = '\0';
+
+	pr_info("kallsyms: %s\n", kallsyms_xor_banner);
+	return 0;
+}
+postcore_initcall(kallsyms_xor_init);
+#endif
