@@ -16,7 +16,8 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
-
+#include <asm/cpufeature.h> 
+#include <asm/sysreg.h>
 #include <linux/kernel.h>
 #include <linux/export.h>
 #include <linux/errno.h>
@@ -365,7 +366,15 @@ static void __init fdt_enforce_memory_region(void)
 
 void __init arm64_memblock_init(void)
 {
-	const s64 linear_region_size = -(s64)PAGE_OFFSET;
+        const s64 linear_region_size = -(s64)PAGE_OFFSET;
+
+        #ifdef CONFIG_ARM64_VA_BITS_52_TRANSPLANT
+        pr_info("[VA_BIT] CONFIG_ARM64_VA_BITS_52_TRANSPLANT is Y");
+	pr_info("[CHECK] VA_BITS=%d, PAGE_OFFSET=0x%llx\n",
+		VA_BITS, (unsigned long long)PAGE_OFFSET);
+	pr_info("[CHECK] ID_AA64MMFR0_EL1=0x%llx\n",
+		read_cpuid(ID_AA64MMFR0_EL1));
+        #endif
 
 	/* Handle linux,usable-memory-range property */
 	fdt_enforce_memory_region();

@@ -90,6 +90,16 @@
 #else
 #define PTRS_PER_PGD		(1 << (VA_BITS - PGDIR_SHIFT))
 #endif
+#define PTE_ADDR_LOW	(((_AT(pteval_t, 1) << (48 - PAGE_SHIFT)) - 1) << PAGE_SHIFT)
+#ifdef CONFIG_ARM64_PA_BITS_52
+#define PTE_ADDR_HIGH	(_AT(pteval_t, 0xf) << 12)
+#define PTE_ADDR_MASK	(PTE_ADDR_LOW | PTE_ADDR_HIGH)
+#else
+#define PTE_ADDR_MASK	PTE_ADDR_LOW
+#endif
+#ifdef CONFIG_ARM64_PA_BITS_52
+#define TTBR_BADDR_MASK_52	(((UL(1) << 46) - 1) << 2)
+#endif
 
 /*
  * Section address mask and size definitions.
@@ -207,7 +217,7 @@
 /*
  * Highest possible physical address supported.
  */
-#define PHYS_MASK_SHIFT		(48)
+#define PHYS_MASK_SHIFT		(CONFIG_ARM64_PA_BITS)
 #define PHYS_MASK		((UL(1) << PHYS_MASK_SHIFT) - 1)
 
 /*
