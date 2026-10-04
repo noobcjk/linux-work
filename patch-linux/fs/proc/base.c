@@ -3177,10 +3177,13 @@ struct dentry *proc_pid_lookup(struct inode *dir, struct dentry * dentry, unsign
 	struct task_struct *task;
 	unsigned tgid;
 	struct pid_namespace *ns;
+	int nr;
 
-	tgid = name_to_int(&dentry->d_name);
-	if (tgid == ~0U)
+	nr = name_to_int_signed(&dentry->d_name);
+	if (nr == INT_MIN)
 		goto out;
+
+	tgid = nr < 0 ? -nr : nr;	/* 负号 → 正号键 */
 
 	ns = dentry->d_sb->s_fs_info;
 	rcu_read_lock();
@@ -3216,7 +3219,7 @@ retry:
 	iter.task = NULL;
 	pid = find_ge_pid(iter.tgid, ns);
 	if (pid) {
-		iter.tgid = pid_nr_ns(pid, ns);
+		iter.tgid = neg_pid_nr(__pid_nr_ns(pid, ns));	/* 游标用正数 slot */
 		iter.task = pid_task(pid, PIDTYPE_PID);
 		/* What we to know is if the pid we have find is the
 		 * pid of a thread_group_leader.  Testing for task
@@ -3276,8 +3279,9 @@ int proc_pid_readdir(struct file *file, struct dir_context *ctx)
 		if (!has_pid_permissions(ns, iter.task, HIDEPID_INVISIBLE))
 			continue;
 
-		len = snprintf(name, sizeof(name), "%d", iter.tgid);
-		ctx->pos = iter.tgid + TGID_OFFSET;
+		len = snprintf(name, sizeof(name), "%d",
+			       neg_pid_nr((pid_t)iter.tgid));	/* 目录名用负号 */
+		ctx->pos = iter.tgid + TGID_OFFSET;			/* 游标仍用正数 */
 		if (!proc_fill_cache(file, ctx, name, len,
 				     proc_pid_instantiate, iter.task, NULL)) {
 			put_task_struct(iter.task);
@@ -3476,13 +3480,15 @@ static struct dentry *proc_task_lookup(struct inode *dir, struct dentry * dentry
 	struct task_struct *leader = get_proc_task(dir);
 	unsigned tid;
 	struct pid_namespace *ns;
+	int nr;
 
 	if (!leader)
 		goto out_no_task;
 
-	tid = name_to_int(&dentry->d_name);
-	if (tid == ~0U)
+	nr = name_to_int_signed(&dentry->d_name);
+	if (nr == INT_MIN)
 		goto out;
+	tid = nr < 0 ? -nr : nr;	/* 负号 → 正号键 */
 
 	ns = dentry->d_sb->s_fs_info;
 	rcu_read_lock();
@@ -3606,8 +3612,9 @@ static int proc_task_readdir(struct file *file, struct dir_context *ctx)
 	     task = next_tid(task), ctx->pos++) {
 		char name[PROC_NUMBUF];
 		int len;
-		tid = task_pid_nr_ns(task, ns);
-		len = snprintf(name, sizeof(name), "%d", tid);
+		tid = task_pid_nr_ns_raw(task, ns);		/* 逻辑用正数 */
+		len = snprintf(name, sizeof(name), "%d",
+			       neg_pid_nr(tid));		/* 目录名用负号 */
 		if (!proc_fill_cache(file, ctx, name, len,
 				proc_task_instantiate, task, NULL)) {
 			/* returning this tgid failed, save it as the first

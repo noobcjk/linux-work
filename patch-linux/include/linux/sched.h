@@ -1205,6 +1205,21 @@ static inline pid_t task_pid_nr_ns(struct task_struct *tsk, struct pid_namespace
 	return __task_pid_nr_ns(tsk, PIDTYPE_PID, ns);
 }
 
+/* 内部使用：返回正数 pid，仅供 /proc 迭代（f_version / first_tid 需要正数） */
+static inline pid_t task_pid_nr_ns_raw(struct task_struct *tsk,
+				       struct pid_namespace *ns)
+{
+	struct pid *pid;
+	pid_t nr;
+
+	rcu_read_lock();
+	pid = rcu_dereference(tsk->pids[PIDTYPE_PID].pid);
+	nr = neg_pid_nr(__pid_nr_ns(pid, ns));	/* 正数 slot，仅供迭代 */
+	rcu_read_unlock();
+
+	return nr;
+}
+
 static inline pid_t task_pid_vnr(struct task_struct *tsk)
 {
 	return __task_pid_nr_ns(tsk, PIDTYPE_PID, NULL);
@@ -1326,7 +1341,7 @@ static inline char task_state_to_char(struct task_struct *tsk)
  */
 static inline int is_global_init(struct task_struct *tsk)
 {
-	return task_tgid_nr(tsk) == 1;
+	return task_tgid_nr(tsk) == -1;	/* pid 1 的负号 */
 }
 
 extern struct pid *cad_pid;

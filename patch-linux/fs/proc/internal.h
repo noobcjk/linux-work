@@ -9,6 +9,7 @@
  * 2 of the License, or (at your option) any later version.
  */
 
+#include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/proc_ns.h>
 #include <linux/spinlock.h>
@@ -123,6 +124,40 @@ static inline unsigned name_to_int(const struct qstr *qstr)
 	return n;
 out:
 	return ~0U;
+}
+
+/*
+ * 解析 pid 目录名，允许前导 '-'。
+ * 合法返回有符号整数；非法返回 INT_MIN。
+ */
+static inline int name_to_int_signed(const struct qstr *qstr)
+{
+	const char *name = qstr->name;
+	int len = qstr->len;
+	int n = 0, i = 0, neg = 0;
+
+	if (len < 1)
+		goto out;
+	if (name[0] == '-') {
+		if (len < 2)
+			goto out;
+		neg = 1;
+		i = 1;
+	}
+	if (len - i > 1 && name[i] == '0')	/* 禁止前导 0，"0" 除外 */
+		goto out;
+	for (; i < len; i++) {
+		unsigned c = name[i] - '0';
+
+		if (c > 9)
+			goto out;
+		if (n > (INT_MAX - (int)c) / 10)
+			goto out;
+		n = n * 10 + c;
+	}
+	return neg ? -n : n;
+out:
+	return INT_MIN;
 }
 
 /*

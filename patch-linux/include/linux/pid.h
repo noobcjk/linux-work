@@ -150,7 +150,7 @@ static inline struct pid_namespace *ns_of_pid(struct pid *pid)
  */
 static inline bool is_child_reaper(struct pid *pid)
 {
-	return pid->numbers[pid->level].nr == 1;
+	return pid->numbers[pid->level].nr == -1;	/* 原生负数，init 为 -1 */
 }
 
 /*
@@ -164,7 +164,10 @@ static inline bool is_child_reaper(struct pid *pid)
  * see also task_xid_nr() etc in include/linux/sched.h
  */
 
-static inline pid_t pid_nr(struct pid *pid)
+/*
+ * 内部使用：pid->numbers[].nr 的原始存储值（原生负数）
+ */
+static inline pid_t __pid_nr(struct pid *pid)
 {
 	pid_t nr = 0;
 	if (pid)
@@ -172,8 +175,34 @@ static inline pid_t pid_nr(struct pid *pid)
 	return nr;
 }
 
-pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns);
-pid_t pid_vnr(struct pid *pid);
+/*
+ * 符号翻转，0 保持 0。用于在“负数存储”与“正数 slot（位图/迭代）”之间切换。
+ */
+static inline pid_t neg_pid_nr(pid_t nr)
+{
+	return nr ? -nr : 0;
+}
+
+/*
+ * 系统调用 ABI 边界：返回值必须落在非负区间。
+ * 因为 [-4095,-1] 会被 libc 当成 -errno，所以负号约定不能越过
+ * syscall 边界；这里把内部负号 pid 翻回正号（0 保持 0）。
+ */
+static inline pid_t syscall_pid_nr(pid_t nr)
+{
+	if (nr < 0)
+		nr = -nr;
+	return nr;
+}
+
+static inline pid_t pid_nr(struct pid *pid)
+{
+	return __pid_nr(pid);		/* 原生负数 */
+}
+
+pid_t __pid_nr_ns(struct pid *pid, struct pid_namespace *ns);	/* 原生负数 */
+pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns);	/* 原生负数 */
+pid_t pid_vnr(struct pid *pid);					/* 原生负数 */
 
 #define do_each_pid_task(pid, type, task)				\
 	do {								\

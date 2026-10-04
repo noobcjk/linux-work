@@ -1478,7 +1478,7 @@ SYSCALL_DEFINE1(set_tid_address, int __user *, tidptr)
 {
 	current->clear_child_tid = tidptr;
 
-	return task_pid_vnr(current);
+	return syscall_pid_nr(task_pid_vnr(current));
 }
 
 static void rt_mutex_init_task(struct task_struct *p)
@@ -2081,7 +2081,7 @@ long _do_fork(unsigned long clone_flags,
 		trace_sched_process_fork(current, p);
 
 		pid = get_task_pid(p, PIDTYPE_PID);
-		nr = pid_vnr(pid);
+		nr = syscall_pid_nr(pid_vnr(pid));
 
 		if (clone_flags & CLONE_PARENT_SETTID)
 			put_user(nr, parent_tidptr);

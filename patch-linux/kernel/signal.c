@@ -1476,7 +1476,8 @@ static int kill_something_info(int sig, struct siginfo *info, pid_t pid)
 		struct task_struct * p;
 
 		for_each_process(p) {
-			if (task_pid_vnr(p) > 1 &&
+			/* vnr: 0=swapper, -1=init, 其余 < -1 */
+			if (task_pid_vnr(p) < -1 &&
 					!same_thread_group(p, current)) {
 				int err = group_send_sig_info(sig, info, p);
 				++count;
@@ -3136,7 +3137,7 @@ static int do_rt_sigqueueinfo(pid_t pid, int sig, siginfo_t *info)
 	 * Nor can they impersonate a kill()/tgkill(), which adds source info.
 	 */
 	if ((info->si_code >= 0 || info->si_code == SI_TKILL) &&
-	    (task_pid_vnr(current) != pid))
+	    (syscall_pid_nr(task_pid_vnr(current)) != syscall_pid_nr(pid)))
 		return -EPERM;
 
 	info->si_signo = sig;
@@ -3184,7 +3185,7 @@ static int do_rt_tgsigqueueinfo(pid_t tgid, pid_t pid, int sig, siginfo_t *info)
 	 * Nor can they impersonate a kill()/tgkill(), which adds source info.
 	 */
 	if ((info->si_code >= 0 || info->si_code == SI_TKILL) &&
-	    (task_pid_vnr(current) != pid))
+	    (syscall_pid_nr(task_pid_vnr(current)) != syscall_pid_nr(pid)))
 		return -EPERM;
 
 	info->si_signo = sig;

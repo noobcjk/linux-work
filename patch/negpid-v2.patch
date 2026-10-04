@@ -1,0 +1,458 @@
+diff -ruN a/fs/proc/array.c b/fs/proc/array.c
+--- a/fs/proc/array.c	2026-10-04 03:17:22.275243472 +0000
++++ b/fs/proc/array.c	2026-10-04 04:11:20.127724362 +0000
+@@ -190,11 +190,11 @@
+ 
+ 	seq_printf(m, "State:\t%s", get_task_state(p));
+ 
+-	seq_put_decimal_ull(m, "\nTgid:\t", tgid);
+-	seq_put_decimal_ull(m, "\nNgid:\t", ngid);
+-	seq_put_decimal_ull(m, "\nPid:\t", pid_nr_ns(pid, ns));
+-	seq_put_decimal_ull(m, "\nPPid:\t", ppid);
+-	seq_put_decimal_ull(m, "\nTracerPid:\t", tpid);
++	seq_printf(m, "\nTgid:\t%d", tgid);
++	seq_printf(m, "\nNgid:\t%d", ngid);
++	seq_printf(m, "\nPid:\t%d", pid_nr_ns(pid, ns));
++	seq_printf(m, "\nPPid:\t%d", ppid);
++	seq_printf(m, "\nTracerPid:\t%d", tpid);
+ 	seq_put_decimal_ull(m, "\nUid:\t", from_kuid_munged(user_ns, cred->uid));
+ 	seq_put_decimal_ull(m, "\t", from_kuid_munged(user_ns, cred->euid));
+ 	seq_put_decimal_ull(m, "\t", from_kuid_munged(user_ns, cred->suid));
+@@ -217,16 +217,16 @@
+ #ifdef CONFIG_PID_NS
+ 	seq_puts(m, "\nNStgid:");
+ 	for (g = ns->level; g <= pid->level; g++)
+-		seq_put_decimal_ull(m, "\t", task_tgid_nr_ns(p, pid->numbers[g].ns));
++		seq_printf(m, "\t%d", task_tgid_nr_ns(p, pid->numbers[g].ns));
+ 	seq_puts(m, "\nNSpid:");
+ 	for (g = ns->level; g <= pid->level; g++)
+-		seq_put_decimal_ull(m, "\t", task_pid_nr_ns(p, pid->numbers[g].ns));
++		seq_printf(m, "\t%d", task_pid_nr_ns(p, pid->numbers[g].ns));
+ 	seq_puts(m, "\nNSpgid:");
+ 	for (g = ns->level; g <= pid->level; g++)
+-		seq_put_decimal_ull(m, "\t", task_pgrp_nr_ns(p, pid->numbers[g].ns));
++		seq_printf(m, "\t%d", task_pgrp_nr_ns(p, pid->numbers[g].ns));
+ 	seq_puts(m, "\nNSsid:");
+ 	for (g = ns->level; g <= pid->level; g++)
+-		seq_put_decimal_ull(m, "\t", task_session_nr_ns(p, pid->numbers[g].ns));
++		seq_printf(m, "\t%d", task_session_nr_ns(p, pid->numbers[g].ns));
+ #endif
+ 	seq_putc(m, '\n');
+ }
+diff -ruN a/fs/proc/base.c b/fs/proc/base.c
+--- a/fs/proc/base.c	2026-10-04 03:17:22.267243461 +0000
++++ b/fs/proc/base.c	2026-10-04 04:09:58.335611396 +0000
+@@ -3177,11 +3177,14 @@
+ 	struct task_struct *task;
+ 	unsigned tgid;
+ 	struct pid_namespace *ns;
++	int nr;
+ 
+-	tgid = name_to_int(&dentry->d_name);
+-	if (tgid == ~0U)
++	nr = name_to_int_signed(&dentry->d_name);
++	if (nr == INT_MIN)
+ 		goto out;
+ 
++	tgid = nr < 0 ? -nr : nr;	/* 负号 → 正号键 */
++
+ 	ns = dentry->d_sb->s_fs_info;
+ 	rcu_read_lock();
+ 	task = find_task_by_pid_ns(tgid, ns);
+@@ -3216,7 +3219,7 @@
+ 	iter.task = NULL;
+ 	pid = find_ge_pid(iter.tgid, ns);
+ 	if (pid) {
+-		iter.tgid = pid_nr_ns(pid, ns);
++		iter.tgid = neg_pid_nr(__pid_nr_ns(pid, ns));	/* 游标用正数 slot */
+ 		iter.task = pid_task(pid, PIDTYPE_PID);
+ 		/* What we to know is if the pid we have find is the
+ 		 * pid of a thread_group_leader.  Testing for task
+@@ -3276,8 +3279,9 @@
+ 		if (!has_pid_permissions(ns, iter.task, HIDEPID_INVISIBLE))
+ 			continue;
+ 
+-		len = snprintf(name, sizeof(name), "%d", iter.tgid);
+-		ctx->pos = iter.tgid + TGID_OFFSET;
++		len = snprintf(name, sizeof(name), "%d",
++			       neg_pid_nr((pid_t)iter.tgid));	/* 目录名用负号 */
++		ctx->pos = iter.tgid + TGID_OFFSET;			/* 游标仍用正数 */
+ 		if (!proc_fill_cache(file, ctx, name, len,
+ 				     proc_pid_instantiate, iter.task, NULL)) {
+ 			put_task_struct(iter.task);
+@@ -3476,13 +3480,15 @@
+ 	struct task_struct *leader = get_proc_task(dir);
+ 	unsigned tid;
+ 	struct pid_namespace *ns;
++	int nr;
+ 
+ 	if (!leader)
+ 		goto out_no_task;
+ 
+-	tid = name_to_int(&dentry->d_name);
+-	if (tid == ~0U)
++	nr = name_to_int_signed(&dentry->d_name);
++	if (nr == INT_MIN)
+ 		goto out;
++	tid = nr < 0 ? -nr : nr;	/* 负号 → 正号键 */
+ 
+ 	ns = dentry->d_sb->s_fs_info;
+ 	rcu_read_lock();
+@@ -3606,8 +3612,9 @@
+ 	     task = next_tid(task), ctx->pos++) {
+ 		char name[PROC_NUMBUF];
+ 		int len;
+-		tid = task_pid_nr_ns(task, ns);
+-		len = snprintf(name, sizeof(name), "%d", tid);
++		tid = task_pid_nr_ns_raw(task, ns);		/* 逻辑用正数 */
++		len = snprintf(name, sizeof(name), "%d",
++			       neg_pid_nr(tid));		/* 目录名用负号 */
+ 		if (!proc_fill_cache(file, ctx, name, len,
+ 				proc_task_instantiate, task, NULL)) {
+ 			/* returning this tgid failed, save it as the first
+diff -ruN a/fs/proc/internal.h b/fs/proc/internal.h
+--- a/fs/proc/internal.h	2026-10-04 03:17:22.263243455 +0000
++++ b/fs/proc/internal.h	2026-10-04 03:18:35.531345104 +0000
+@@ -9,6 +9,7 @@
+  * 2 of the License, or (at your option) any later version.
+  */
+ 
++#include <linux/kernel.h>
+ #include <linux/proc_fs.h>
+ #include <linux/proc_ns.h>
+ #include <linux/spinlock.h>
+@@ -126,6 +127,40 @@
+ }
+ 
+ /*
++ * 解析 pid 目录名，允许前导 '-'。
++ * 合法返回有符号整数；非法返回 INT_MIN。
++ */
++static inline int name_to_int_signed(const struct qstr *qstr)
++{
++	const char *name = qstr->name;
++	int len = qstr->len;
++	int n = 0, i = 0, neg = 0;
++
++	if (len < 1)
++		goto out;
++	if (name[0] == '-') {
++		if (len < 2)
++			goto out;
++		neg = 1;
++		i = 1;
++	}
++	if (len - i > 1 && name[i] == '0')	/* 禁止前导 0，"0" 除外 */
++		goto out;
++	for (; i < len; i++) {
++		unsigned c = name[i] - '0';
++
++		if (c > 9)
++			goto out;
++		if (n > (INT_MAX - (int)c) / 10)
++			goto out;
++		n = n * 10 + c;
++	}
++	return neg ? -n : n;
++out:
++	return INT_MIN;
++}
++
++/*
+  * Offset of the first process in the /proc root directory..
+  */
+ #define FIRST_PROCESS_ENTRY 256
+diff -ruN a/include/linux/pid.h b/include/linux/pid.h
+--- a/include/linux/pid.h	2026-10-04 03:17:22.235243416 +0000
++++ b/include/linux/pid.h	2026-10-04 04:09:08.795542975 +0000
+@@ -150,7 +150,7 @@
+  */
+ static inline bool is_child_reaper(struct pid *pid)
+ {
+-	return pid->numbers[pid->level].nr == 1;
++	return pid->numbers[pid->level].nr == -1;	/* 原生负数，init 为 -1 */
+ }
+ 
+ /*
+@@ -164,7 +164,10 @@
+  * see also task_xid_nr() etc in include/linux/sched.h
+  */
+ 
+-static inline pid_t pid_nr(struct pid *pid)
++/*
++ * 内部使用：pid->numbers[].nr 的原始存储值（原生负数）
++ */
++static inline pid_t __pid_nr(struct pid *pid)
+ {
+ 	pid_t nr = 0;
+ 	if (pid)
+@@ -172,8 +175,34 @@
+ 	return nr;
+ }
+ 
+-pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns);
+-pid_t pid_vnr(struct pid *pid);
++/*
++ * 符号翻转，0 保持 0。用于在“负数存储”与“正数 slot（位图/迭代）”之间切换。
++ */
++static inline pid_t neg_pid_nr(pid_t nr)
++{
++	return nr ? -nr : 0;
++}
++
++/*
++ * 系统调用 ABI 边界：返回值必须落在非负区间。
++ * 因为 [-4095,-1] 会被 libc 当成 -errno，所以负号约定不能越过
++ * syscall 边界；这里把内部负号 pid 翻回正号（0 保持 0）。
++ */
++static inline pid_t syscall_pid_nr(pid_t nr)
++{
++	if (nr < 0)
++		nr = -nr;
++	return nr;
++}
++
++static inline pid_t pid_nr(struct pid *pid)
++{
++	return __pid_nr(pid);		/* 原生负数 */
++}
++
++pid_t __pid_nr_ns(struct pid *pid, struct pid_namespace *ns);	/* 原生负数 */
++pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns);	/* 原生负数 */
++pid_t pid_vnr(struct pid *pid);					/* 原生负数 */
+ 
+ #define do_each_pid_task(pid, type, task)				\
+ 	do {								\
+diff -ruN a/include/linux/sched.h b/include/linux/sched.h
+--- a/include/linux/sched.h	2026-10-04 03:17:22.243243428 +0000
++++ b/include/linux/sched.h	2026-10-04 04:09:50.387600419 +0000
+@@ -1205,6 +1205,21 @@
+ 	return __task_pid_nr_ns(tsk, PIDTYPE_PID, ns);
+ }
+ 
++/* 内部使用：返回正数 pid，仅供 /proc 迭代（f_version / first_tid 需要正数） */
++static inline pid_t task_pid_nr_ns_raw(struct task_struct *tsk,
++				       struct pid_namespace *ns)
++{
++	struct pid *pid;
++	pid_t nr;
++
++	rcu_read_lock();
++	pid = rcu_dereference(tsk->pids[PIDTYPE_PID].pid);
++	nr = neg_pid_nr(__pid_nr_ns(pid, ns));	/* 正数 slot，仅供迭代 */
++	rcu_read_unlock();
++
++	return nr;
++}
++
+ static inline pid_t task_pid_vnr(struct task_struct *tsk)
+ {
+ 	return __task_pid_nr_ns(tsk, PIDTYPE_PID, NULL);
+@@ -1326,7 +1341,7 @@
+  */
+ static inline int is_global_init(struct task_struct *tsk)
+ {
+-	return task_tgid_nr(tsk) == 1;
++	return task_tgid_nr(tsk) == -1;	/* pid 1 的负号 */
+ }
+ 
+ extern struct pid *cad_pid;
+diff -ruN a/kernel/exit.c b/kernel/exit.c
+--- a/kernel/exit.c	2026-10-04 03:26:58.268042535 +0000
++++ b/kernel/exit.c	2026-10-04 03:28:48.468195155 +0000
+@@ -1045,7 +1045,7 @@
+ static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
+ {
+ 	int state, status;
+-	pid_t pid = task_pid_vnr(p);
++	pid_t pid = syscall_pid_nr(task_pid_vnr(p));
+ 	uid_t uid = from_kuid_munged(current_user_ns(), task_uid(p));
+ 	struct waitid_info *infop;
+ 
+@@ -1246,7 +1246,7 @@
+ 	 * possibly take page faults for user memory.
+ 	 */
+ 	get_task_struct(p);
+-	pid = task_pid_vnr(p);
++	pid = syscall_pid_nr(task_pid_vnr(p));
+ 	why = ptrace ? CLD_TRAPPED : CLD_STOPPED;
+ 	read_unlock(&tasklist_lock);
+ 	sched_annotate_sleep();
+@@ -1296,7 +1296,7 @@
+ 	uid = from_kuid_munged(current_user_ns(), task_uid(p));
+ 	spin_unlock_irq(&p->sighand->siglock);
+ 
+-	pid = task_pid_vnr(p);
++	pid = syscall_pid_nr(task_pid_vnr(p));
+ 	get_task_struct(p);
+ 	read_unlock(&tasklist_lock);
+ 	sched_annotate_sleep();
+diff -ruN a/kernel/fork.c b/kernel/fork.c
+--- a/kernel/fork.c	2026-10-04 03:26:58.252042513 +0000
++++ b/kernel/fork.c	2026-10-04 03:28:18.612153807 +0000
+@@ -1478,7 +1478,7 @@
+ {
+ 	current->clear_child_tid = tidptr;
+ 
+-	return task_pid_vnr(current);
++	return syscall_pid_nr(task_pid_vnr(current));
+ }
+ 
+ static void rt_mutex_init_task(struct task_struct *p)
+@@ -2081,7 +2081,7 @@
+ 		trace_sched_process_fork(current, p);
+ 
+ 		pid = get_task_pid(p, PIDTYPE_PID);
+-		nr = pid_vnr(pid);
++		nr = syscall_pid_nr(pid_vnr(pid));
+ 
+ 		if (clone_flags & CLONE_PARENT_SETTID)
+ 			put_user(nr, parent_tidptr);
+diff -ruN a/kernel/pid.c b/kernel/pid.c
+--- a/kernel/pid.c	2026-10-04 03:17:22.247243433 +0000
++++ b/kernel/pid.c	2026-10-04 04:09:40.535586812 +0000
+@@ -103,7 +103,7 @@
+ 
+ static void free_pidmap(struct upid *upid)
+ {
+-	int nr = upid->nr;
++	int nr = -upid->nr;		/* 存储是负数，位图 slot 用正数 */
+ 	struct pidmap *map = upid->ns->pidmap + nr / BITS_PER_PAGE;
+ 	int offset = nr & BITS_PER_PAGE_MASK;
+ 
+@@ -315,7 +315,7 @@
+ 			goto out_free;
+ 		}
+ 
+-		pid->numbers[i].nr = nr;
++		pid->numbers[i].nr = -nr;	/* 原生负数：位图 slot 取负后存储 */
+ 		pid->numbers[i].ns = tmp;
+ 		tmp = tmp->parent;
+ 	}
+@@ -368,6 +368,9 @@
+ {
+ 	struct upid *pnr;
+ 
++	if (nr > 0)		/* 用户态/迭代传正数进来，归一化到负数域 */
++		nr = -nr;
++
+ 	hlist_for_each_entry_rcu(pnr,
+ 			&pid_hash[pid_hashfn(nr, ns)], pid_chain)
+ 		if (pnr->nr == nr && pnr->ns == ns)
+@@ -498,7 +501,7 @@
+ }
+ EXPORT_SYMBOL_GPL(find_get_pid);
+ 
+-pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
++pid_t __pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
+ {
+ 	struct upid *upid;
+ 	pid_t nr = 0;
+@@ -510,6 +513,12 @@
+ 	}
+ 	return nr;
+ }
++EXPORT_SYMBOL_GPL(__pid_nr_ns);
++
++pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
++{
++	return __pid_nr_ns(pid, ns);	/* 存储已是负数，不再翻转 */
++}
+ EXPORT_SYMBOL_GPL(pid_nr_ns);
+ 
+ pid_t pid_vnr(struct pid *pid)
+diff -ruN a/kernel/signal.c b/kernel/signal.c
+--- a/kernel/signal.c	2026-10-04 03:17:22.255243444 +0000
++++ b/kernel/signal.c	2026-10-04 04:10:19.555640704 +0000
+@@ -1476,7 +1476,8 @@
+ 		struct task_struct * p;
+ 
+ 		for_each_process(p) {
+-			if (task_pid_vnr(p) > 1 &&
++			/* vnr: 0=swapper, -1=init, 其余 < -1 */
++			if (task_pid_vnr(p) < -1 &&
+ 					!same_thread_group(p, current)) {
+ 				int err = group_send_sig_info(sig, info, p);
+ 				++count;
+@@ -3136,7 +3137,7 @@
+ 	 * Nor can they impersonate a kill()/tgkill(), which adds source info.
+ 	 */
+ 	if ((info->si_code >= 0 || info->si_code == SI_TKILL) &&
+-	    (task_pid_vnr(current) != pid))
++	    (syscall_pid_nr(task_pid_vnr(current)) != syscall_pid_nr(pid)))
+ 		return -EPERM;
+ 
+ 	info->si_signo = sig;
+@@ -3184,7 +3185,7 @@
+ 	 * Nor can they impersonate a kill()/tgkill(), which adds source info.
+ 	 */
+ 	if ((info->si_code >= 0 || info->si_code == SI_TKILL) &&
+-	    (task_pid_vnr(current) != pid))
++	    (syscall_pid_nr(task_pid_vnr(current)) != syscall_pid_nr(pid)))
+ 		return -EPERM;
+ 
+ 	info->si_signo = sig;
+diff -ruN a/kernel/sys.c b/kernel/sys.c
+--- a/kernel/sys.c	2026-10-04 03:26:58.236042491 +0000
++++ b/kernel/sys.c	2026-10-04 03:27:59.740127670 +0000
+@@ -839,13 +839,13 @@
+  */
+ SYSCALL_DEFINE0(getpid)
+ {
+-	return task_tgid_vnr(current);
++	return syscall_pid_nr(task_tgid_vnr(current));
+ }
+ 
+ /* Thread ID - the internal kernel "pid" */
+ SYSCALL_DEFINE0(gettid)
+ {
+-	return task_pid_vnr(current);
++	return syscall_pid_nr(task_pid_vnr(current));
+ }
+ 
+ /*
+@@ -862,7 +862,7 @@
+ 	pid = task_tgid_vnr(rcu_dereference(current->real_parent));
+ 	rcu_read_unlock();
+ 
+-	return pid;
++	return syscall_pid_nr(pid);
+ }
+ 
+ SYSCALL_DEFINE0(getuid)
+@@ -960,7 +960,7 @@
+ 	int err;
+ 
+ 	if (!pid)
+-		pid = task_pid_vnr(group_leader);
++		pid = syscall_pid_nr(task_pid_vnr(group_leader));
+ 	if (!pgid)
+ 		pgid = pid;
+ 	if (pgid < 0)
+@@ -1045,7 +1045,7 @@
+ 		if (retval)
+ 			goto out;
+ 	}
+-	retval = pid_vnr(grp);
++	retval = syscall_pid_nr(pid_vnr(grp));
+ out:
+ 	rcu_read_unlock();
+ 	return retval;
+@@ -1082,7 +1082,7 @@
+ 		if (retval)
+ 			goto out;
+ 	}
+-	retval = pid_vnr(sid);
++	retval = syscall_pid_nr(pid_vnr(sid));
+ out:
+ 	rcu_read_unlock();
+ 	return retval;
+@@ -1103,7 +1103,7 @@
+ {
+ 	struct task_struct *group_leader = current->group_leader;
+ 	struct pid *sid = task_pid(group_leader);
+-	pid_t session = pid_vnr(sid);
++	pid_t session = syscall_pid_nr(pid_vnr(sid));
+ 	int err = -EPERM;
+ 
+ 	write_lock_irq(&tasklist_lock);

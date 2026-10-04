@@ -1045,7 +1045,7 @@ eligible_child(struct wait_opts *wo, bool ptrace, struct task_struct *p)
 static int wait_task_zombie(struct wait_opts *wo, struct task_struct *p)
 {
 	int state, status;
-	pid_t pid = task_pid_vnr(p);
+	pid_t pid = syscall_pid_nr(task_pid_vnr(p));
 	uid_t uid = from_kuid_munged(current_user_ns(), task_uid(p));
 	struct waitid_info *infop;
 
@@ -1246,7 +1246,7 @@ unlock_sig:
 	 * possibly take page faults for user memory.
 	 */
 	get_task_struct(p);
-	pid = task_pid_vnr(p);
+	pid = syscall_pid_nr(task_pid_vnr(p));
 	why = ptrace ? CLD_TRAPPED : CLD_STOPPED;
 	read_unlock(&tasklist_lock);
 	sched_annotate_sleep();
@@ -1296,7 +1296,7 @@ static int wait_task_continued(struct wait_opts *wo, struct task_struct *p)
 	uid = from_kuid_munged(current_user_ns(), task_uid(p));
 	spin_unlock_irq(&p->sighand->siglock);
 
-	pid = task_pid_vnr(p);
+	pid = syscall_pid_nr(task_pid_vnr(p));
 	get_task_struct(p);
 	read_unlock(&tasklist_lock);
 	sched_annotate_sleep();

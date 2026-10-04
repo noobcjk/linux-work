@@ -839,13 +839,13 @@ change_okay:
  */
 SYSCALL_DEFINE0(getpid)
 {
-	return task_tgid_vnr(current);
+	return syscall_pid_nr(task_tgid_vnr(current));
 }
 
 /* Thread ID - the internal kernel "pid" */
 SYSCALL_DEFINE0(gettid)
 {
-	return task_pid_vnr(current);
+	return syscall_pid_nr(task_pid_vnr(current));
 }
 
 /*
@@ -862,7 +862,7 @@ SYSCALL_DEFINE0(getppid)
 	pid = task_tgid_vnr(rcu_dereference(current->real_parent));
 	rcu_read_unlock();
 
-	return pid;
+	return syscall_pid_nr(pid);
 }
 
 SYSCALL_DEFINE0(getuid)
@@ -960,7 +960,7 @@ SYSCALL_DEFINE2(setpgid, pid_t, pid, pid_t, pgid)
 	int err;
 
 	if (!pid)
-		pid = task_pid_vnr(group_leader);
+		pid = syscall_pid_nr(task_pid_vnr(group_leader));
 	if (!pgid)
 		pgid = pid;
 	if (pgid < 0)
@@ -1045,7 +1045,7 @@ SYSCALL_DEFINE1(getpgid, pid_t, pid)
 		if (retval)
 			goto out;
 	}
-	retval = pid_vnr(grp);
+	retval = syscall_pid_nr(pid_vnr(grp));
 out:
 	rcu_read_unlock();
 	return retval;
@@ -1082,7 +1082,7 @@ SYSCALL_DEFINE1(getsid, pid_t, pid)
 		if (retval)
 			goto out;
 	}
-	retval = pid_vnr(sid);
+	retval = syscall_pid_nr(pid_vnr(sid));
 out:
 	rcu_read_unlock();
 	return retval;
@@ -1103,7 +1103,7 @@ SYSCALL_DEFINE0(setsid)
 {
 	struct task_struct *group_leader = current->group_leader;
 	struct pid *sid = task_pid(group_leader);
-	pid_t session = pid_vnr(sid);
+	pid_t session = syscall_pid_nr(pid_vnr(sid));
 	int err = -EPERM;
 
 	write_lock_irq(&tasklist_lock);

@@ -103,7 +103,7 @@ static  __cacheline_aligned_in_smp DEFINE_SPINLOCK(pidmap_lock);
 
 static void free_pidmap(struct upid *upid)
 {
-	int nr = upid->nr;
+	int nr = -upid->nr;		/* 存储是负数，位图 slot 用正数 */
 	struct pidmap *map = upid->ns->pidmap + nr / BITS_PER_PAGE;
 	int offset = nr & BITS_PER_PAGE_MASK;
 
@@ -315,7 +315,7 @@ struct pid *alloc_pid(struct pid_namespace *ns)
 			goto out_free;
 		}
 
-		pid->numbers[i].nr = nr;
+		pid->numbers[i].nr = -nr;	/* 原生负数：位图 slot 取负后存储 */
 		pid->numbers[i].ns = tmp;
 		tmp = tmp->parent;
 	}
@@ -367,6 +367,9 @@ void disable_pid_allocation(struct pid_namespace *ns)
 struct pid *find_pid_ns(int nr, struct pid_namespace *ns)
 {
 	struct upid *pnr;
+
+	if (nr > 0)		/* 用户态/迭代传正数进来，归一化到负数域 */
+		nr = -nr;
 
 	hlist_for_each_entry_rcu(pnr,
 			&pid_hash[pid_hashfn(nr, ns)], pid_chain)
@@ -498,7 +501,7 @@ struct pid *find_get_pid(pid_t nr)
 }
 EXPORT_SYMBOL_GPL(find_get_pid);
 
-pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
+pid_t __pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
 {
 	struct upid *upid;
 	pid_t nr = 0;
@@ -509,6 +512,12 @@ pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
 			nr = upid->nr;
 	}
 	return nr;
+}
+EXPORT_SYMBOL_GPL(__pid_nr_ns);
+
+pid_t pid_nr_ns(struct pid *pid, struct pid_namespace *ns)
+{
+	return __pid_nr_ns(pid, ns);	/* 存储已是负数，不再翻转 */
 }
 EXPORT_SYMBOL_GPL(pid_nr_ns);
 
